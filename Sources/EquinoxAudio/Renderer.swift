@@ -56,29 +56,39 @@ final class ConfigMailbox: @unchecked Sendable {
 /// Owns the realtime render path invoked by the aggregate device's IOProc.
 public final class Renderer: @unchecked Sendable {
     public static let maxFrames = 4096
+    static let capacity = maxFrames * 4
 
     public let analysis = AnalysisTap()
+    public let stripMeters = StripMeters()
+    private var mixBus = MixBus(stripCount: 1, maxFrames: Renderer.capacity)
+    private var stripCount = 1
+    private let mixL = UnsafeMutablePointer<Float>.allocate(capacity: Renderer.capacity)
+    private let mixR = UnsafeMutablePointer<Float>.allocate(capacity: Renderer.capacity)
     private let mailbox = ConfigMailbox()
     private var processor = MasterProcessor(maxFrames: Renderer.maxFrames, sampleRate: 48_000)
     private var current: ConfigMailbox.Entry?
     private var inputStreamOffset = 0
-    private let left = UnsafeMutablePointer<Float>.allocate(capacity: Renderer.maxFrames * 4)
-    private let right = UnsafeMutablePointer<Float>.allocate(capacity: Renderer.maxFrames * 4)
+    private let left = UnsafeMutablePointer<Float>.allocate(capacity: Renderer.capacity)
+    private let right = UnsafeMutablePointer<Float>.allocate(capacity: Renderer.capacity)
     private let lastCallback = Atomic<UInt64>(0)
 
     public init() {
-        left.initialize(repeating: 0, count: Renderer.maxFrames * 4)
-        right.initialize(repeating: 0, count: Renderer.maxFrames * 4)
+        left.initialize(repeating: 0, count: Renderer.capacity)
+        right.initialize(repeating: 0, count: Renderer.capacity)
+        mixL.initialize(repeating: 0, count: Renderer.capacity)
+        mixR.initialize(repeating: 0, count: Renderer.capacity)
     }
 
-    deinit { left.deallocate(); right.deallocate() }
+    deinit { left.deallocate(); right.deallocate(); mixL.deallocate(); mixR.deallocate() }
 
     /// Main thread.
     public func submit(_ config: DSPConfig) { mailbox.post(config) }
 
     /// Main thread, only while the IOProc is stopped.
-    func prepare(sampleRate: Double, inputStreamOffset: Int) {
+    func prepare(sampleRate: Double, inputStreamOffset: Int, stripCount: Int = 1) {
         processor = MasterProcessor(maxFrames: Renderer.maxFrames, sampleRate: sampleRate)
+        mixBus = MixBus(stripCount: stripCount, maxFrames: Renderer.capacity)
+        self.stripCount = mixBus.stripCount
         current = nil
         mailbox.reset()
         self.inputStreamOffset = inputStreamOffset
@@ -91,17 +101,24 @@ public final class Renderer: @unchecked Sendable {
         lastCallback.store(clock_gettime_nsec_np(CLOCK_UPTIME_RAW), ordering: .relaxed)
         let out = UnsafeMutableAudioBufferListPointer(output)
         let inp = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: input))
-        let frames = min(ChannelIO.frameCount(of: out), Renderer.maxFrames * 4)
+        let frames = min(ChannelIO.frameCount(of: out), Renderer.capacity)
         guard frames > 0 else { return }
 
         if let entry = mailbox.take() {
             current = entry                 // previous entry is still owned by the mailbox history
             mailbox.acknowledge(entry)
             processor.apply(entry.config)
+            mixBus.apply(entry.config.strips)
         }
-        ChannelIO.readStereo(from: inp, bufferIndex: inputStreamOffset, frames: frames, left: left, right: right)
-        if current != nil { processor.process(left: left, right: right, frames: frames) }
-        analysis.write(left: left, right: right, frames: frames)
-        ChannelIO.writeStereo(left: left, right: right, frames: frames, to: out)
+        mixL.update(repeating: 0, count: frames)
+        mixR.update(repeating: 0, count: frames)
+        for strip in 0..<stripCount {
+            ChannelIO.readStereo(from: inp, bufferIndex: inputStreamOffset + strip, frames: frames, left: left, right: right)
+            mixBus.accumulate(strip: strip, left: left, right: right, intoLeft: mixL, intoRight: mixR, frames: frames)
+            stripMeters.record(strip: strip, left: left, right: right, frames: frames)
+        }
+        if current != nil { processor.process(left: mixL, right: mixR, frames: frames) }
+        analysis.write(left: mixL, right: mixR, frames: frames)
+        ChannelIO.writeStereo(left: mixL, right: mixR, frames: frames, to: out)
     }
 }

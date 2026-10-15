@@ -87,6 +87,39 @@ public enum AudioSystem {
     }
 }
 
+public struct AudioProcessInfo: Hashable, Sendable {
+    public let objectID: AudioObjectID
+    public let pid: pid_t
+    public let bundleID: String
+    public let executableName: String
+    public let isRunningOutput: Bool
+
+    public init(objectID: AudioObjectID, pid: pid_t, bundleID: String, executableName: String, isRunningOutput: Bool) {
+        self.objectID = objectID; self.pid = pid; self.bundleID = bundleID
+        self.executableName = executableName; self.isRunningOutput = isRunningOutput
+    }
+}
+
+extension AudioSystem {
+    /// Every process the HAL knows about (clients of Core Audio).
+    public static func audioProcesses() -> [AudioProcessInfo] {
+        let ids = (try? AudioObjectID.system.getArray(kAudioHardwarePropertyProcessObjectList, zero: AudioObjectID(0))) ?? []
+        return ids.compactMap { id in
+            guard let pid = try? id.get(kAudioProcessPropertyPID, initial: pid_t(0)), pid > 0 else { return nil }
+            let bundleID = (try? id.getString(kAudioProcessPropertyBundleID)) ?? ""
+            let running = ((try? id.get(kAudioProcessPropertyIsRunningOutput, initial: UInt32(0))) ?? 0) != 0
+            return AudioProcessInfo(objectID: id, pid: pid, bundleID: bundleID,
+                                    executableName: executableName(pid), isRunningOutput: running)
+        }
+    }
+
+    static func executableName(_ pid: pid_t) -> String {
+        var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+        guard proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0 else { return "pid \(pid)" }
+        return URL(fileURLWithPath: String(cString: buffer)).lastPathComponent
+    }
+}
+
 /// Core Audio property listener delivering on the main queue; removed on deinit.
 public final class PropertyListener {
     private let object: AudioObjectID

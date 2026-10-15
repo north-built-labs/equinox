@@ -66,6 +66,13 @@ final class PreviewAudio: AudioControlling {
     var onOutputDeviceChange: ((AudioDevice) -> Void)?
     var onHardwareVolumeChange: ((Float) -> Void)?
     let analysis = AnalysisTap()
+    var onProcessesChange: (([AudioProcessInfo]) -> Void)?
+    let stripMeters = StripMeters()
+    var activeStripKeys: [String] = [""]
+    var processes: [AudioProcessInfo] = []
+    var dedicated: [DedicatedStrip] = []
+    func audioProcesses() -> [AudioProcessInfo] { processes }
+    func setDedicatedStrips(_ strips: [DedicatedStrip]) { dedicated = strips }
     private let devices = [AudioDevice(id: 1, uid: "speakers", name: "MacBook Pro Speakers", transportType: 0),
                            AudioDevice(id: 2, uid: "airpods", name: "AirPods Pro", transportType: 0)]
 

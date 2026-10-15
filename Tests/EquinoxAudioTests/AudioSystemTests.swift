@@ -21,4 +21,11 @@ final class AudioSystemTests: XCTestCase {
         _ = AudioSystem.outputDevices()   // ensure we are a HAL client
         XCTAssertNotEqual(try AudioSystem.processObject(forPID: getpid()), AudioObjectID(kAudioObjectUnknown))
     }
+
+    func testListsOwnAudioProcess() {
+        _ = AudioSystem.outputDevices()
+        let own = AudioSystem.audioProcesses().first { $0.pid == getpid() }
+        XCTAssertNotNil(own)
+        XCTAssertFalse(own!.executableName.isEmpty)
+    }
 }

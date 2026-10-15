@@ -1,5 +1,13 @@
 import CoreAudio
+import EquinoxDSP
 import Foundation
+
+/// An app that gets its own tap (and mixer strip).
+public struct DedicatedStrip: Hashable, Sendable {
+    public let key: String
+    public let processes: [AudioObjectID]
+    public init(key: String, processes: [AudioObjectID]) { self.key = key; self.processes = processes }
+}
 
 /// One global process tap (excluding Equinox) + a private aggregate device clocked by the real output.
 /// The tapped audio is muted at the source while this session lives; destroying it (or Equinox exiting)
@@ -7,23 +15,34 @@ import Foundation
 public final class TapSession {
     public let outputDeviceID: AudioObjectID
     public private(set) var sampleRate: Double = 48_000
-    private var tapID = AudioObjectID(kAudioObjectUnknown)
+    public let stripKeys: [String]
+    private var tapIDs: [AudioObjectID] = []
     private var aggregateID = AudioObjectID(kAudioObjectUnknown)
     private var ioProcID: AudioDeviceIOProcID?
     private var isStarted = false
 
-    public init(outputDeviceID: AudioObjectID, excludedProcesses: [AudioObjectID], renderer: Renderer) throws {
+    public init(outputDeviceID: AudioObjectID, excludedProcesses: [AudioObjectID], dedicated: [DedicatedStrip] = [],
+                renderer: Renderer) throws {
         self.outputDeviceID = outputDeviceID
+        let strips = Array(dedicated.filter { !$0.processes.isEmpty }.prefix(MixBus.maxStrips - 1))
+        stripKeys = [StripSettings.othersKey] + strips.map(\.key)
         do {
             let exclusions = try AudioSystem.validatedExclusions(excludedProcesses)
             let outputUID = try outputDeviceID.getString(kAudioDevicePropertyDeviceUID)
 
-            let description = CATapDescription(stereoGlobalTapButExcludeProcesses: exclusions)
-            description.uuid = UUID()
-            description.name = "Equinox"
-            description.isPrivate = true
-            description.muteBehavior = .mutedWhenTapped
-            try check(AudioHardwareCreateProcessTap(description, &tapID), "Create system audio tap")
+            // Rest tap: everything except Equinox and the dedicated apps. Then one tap per dedicated app.
+            let rest = CATapDescription(stereoGlobalTapButExcludeProcesses: exclusions + strips.flatMap(\.processes))
+            var descriptions = [rest]
+            descriptions += strips.map { CATapDescription(stereoMixdownOfProcesses: $0.processes) }
+            for (i, d) in descriptions.enumerated() {
+                d.uuid = UUID()
+                d.name = i == 0 ? "Equinox" : "Equinox \(stripKeys[i])"
+                d.isPrivate = true
+                d.muteBehavior = .mutedWhenTapped
+                var id = AudioObjectID(kAudioObjectUnknown)
+                try check(AudioHardwareCreateProcessTap(d, &id), "Create audio tap \(i)")
+                tapIDs.append(id)
+            }
 
             let aggregate: [String: Any] = [
                 kAudioAggregateDeviceNameKey: "Equinox",
@@ -33,22 +52,23 @@ public final class TapSession {
                 kAudioAggregateDeviceIsStackedKey: false,
                 kAudioAggregateDeviceTapAutoStartKey: true,
                 kAudioAggregateDeviceSubDeviceListKey: [[kAudioSubDeviceUIDKey: outputUID]],
-                kAudioAggregateDeviceTapListKey: [[kAudioSubTapUIDKey: description.uuid.uuidString,
-                                                   kAudioSubTapDriftCompensationKey: true]],
+                kAudioAggregateDeviceTapListKey: descriptions.map {
+                    [kAudioSubTapUIDKey: $0.uuid.uuidString, kAudioSubTapDriftCompensationKey: true] as [String: Any]
+                },
             ]
             try check(AudioHardwareCreateAggregateDevice(aggregate as CFDictionary, &aggregateID), "Create aggregate device")
 
             sampleRate = try AudioSystem.nominalSampleRate(aggregateID)
             // Aggregate input streams: the output device's own inputs first, then the tap.
             let offset = AudioSystem.streamCount(outputDeviceID, scope: kAudioObjectPropertyScopeInput)
-            renderer.prepare(sampleRate: sampleRate, inputStreamOffset: offset)
+            renderer.prepare(sampleRate: sampleRate, inputStreamOffset: offset, stripCount: stripKeys.count)
 
             try check(AudioDeviceCreateIOProcIDWithBlock(&ioProcID, aggregateID, nil) { _, input, _, output, _ in
                 renderer.render(input: input, output: output)
             }, "Create audio callback")
             // Keep the output device's own inputs (e.g. a headset mic) off: only the tap is read.
             // Otherwise starting IO could open the microphone (orange indicator, Bluetooth HFP mode).
-            try? restrictInputToTap(deviceInputStreams: offset)
+            try? restrictInputToTap(deviceInputStreams: offset, tapStreams: stripKeys.count)
         } catch {
             invalidate()
             throw error
@@ -59,9 +79,9 @@ public final class TapSession {
         Array(repeating: 0, count: deviceInputStreams) + Array(repeating: 1, count: tapStreams)
     }
 
-    private func restrictInputToTap(deviceInputStreams: Int) throws {
+    private func restrictInputToTap(deviceInputStreams: Int, tapStreams: Int) throws {
         guard deviceInputStreams > 0, let ioProcID else { return }
-        let usage = Self.inputStreamUsage(deviceInputStreams: deviceInputStreams, tapStreams: 1)
+        let usage = Self.inputStreamUsage(deviceInputStreams: deviceInputStreams, tapStreams: tapStreams)
         let flagsOffset = MemoryLayout<AudioHardwareIOProcStreamUsage>.offset(of: \.mStreamIsOn)!
         let countOffset = MemoryLayout<AudioHardwareIOProcStreamUsage>.offset(of: \.mNumberStreams)!
         let size = flagsOffset + usage.count * MemoryLayout<UInt32>.size
@@ -86,7 +106,8 @@ public final class TapSession {
         if isStarted, let ioProcID { AudioDeviceStop(aggregateID, ioProcID); isStarted = false }
         if let ioProcID { AudioDeviceDestroyIOProcID(aggregateID, ioProcID); self.ioProcID = nil }
         if aggregateID != kAudioObjectUnknown { AudioHardwareDestroyAggregateDevice(aggregateID); aggregateID = AudioObjectID(kAudioObjectUnknown) }
-        if tapID != kAudioObjectUnknown { AudioHardwareDestroyProcessTap(tapID); tapID = AudioObjectID(kAudioObjectUnknown) }
+        for id in tapIDs { AudioHardwareDestroyProcessTap(id) }
+        tapIDs.removeAll()
     }
 
     deinit { invalidate() }

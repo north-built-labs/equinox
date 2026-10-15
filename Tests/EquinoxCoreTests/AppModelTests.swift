@@ -9,6 +9,13 @@ final class FakeAudio: AudioControlling {
     var onOutputDeviceChange: ((AudioDevice) -> Void)?
     var onHardwareVolumeChange: ((Float) -> Void)?
     let analysis = AnalysisTap()
+    var onProcessesChange: (([AudioProcessInfo]) -> Void)?
+    let stripMeters = StripMeters()
+    var activeStripKeys: [String] = [""]
+    var processes: [AudioProcessInfo] = []
+    var dedicated: [DedicatedStrip] = []
+    func audioProcesses() -> [AudioProcessInfo] { processes }
+    func setDedicatedStrips(_ strips: [DedicatedStrip]) { dedicated = strips }
     var applied: [DSPSettings] = []
     var started = 0
     var hasHardwareVolume = true
