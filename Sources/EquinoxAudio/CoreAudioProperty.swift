@@ -39,22 +39,26 @@ extension AudioObjectID {
         return AudioObjectIsPropertySettable(self, &a, &settable) == noErr && settable.boolValue
     }
 
-    func get<T>(_ selector: AudioObjectPropertySelector, scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal,
+    func get<T: BitwiseCopyable>(_ selector: AudioObjectPropertySelector, scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal,
                 initial: T) throws -> T {
         var a = address(selector, scope)
         var value = initial
         var size = UInt32(MemoryLayout<T>.size)
-        try check(AudioObjectGetPropertyData(self, &a, 0, nil, &size, &value), "Read property \(selector)")
+        try withUnsafeMutableBytes(of: &value) { raw in
+            try check(AudioObjectGetPropertyData(self, &a, 0, nil, &size, raw.baseAddress!), "Read property \(selector)")
+        }
         return value
     }
 
-    func getArray<T>(_ selector: AudioObjectPropertySelector, scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal,
+    func getArray<T: BitwiseCopyable>(_ selector: AudioObjectPropertySelector, scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal,
                      zero: T) throws -> [T] {
         var a = address(selector, scope)
         var size: UInt32 = 0
         try check(AudioObjectGetPropertyDataSize(self, &a, 0, nil, &size), "Size of property \(selector)")
         var values = [T](repeating: zero, count: Int(size) / MemoryLayout<T>.stride)
-        try check(AudioObjectGetPropertyData(self, &a, 0, nil, &size, &values), "Read property \(selector)")
+        try values.withUnsafeMutableBytes { raw in
+            try check(AudioObjectGetPropertyData(self, &a, 0, nil, &size, raw.baseAddress!), "Read property \(selector)")
+        }
         return Array(values.prefix(Int(size) / MemoryLayout<T>.stride))
     }
 
@@ -66,10 +70,12 @@ extension AudioObjectID {
         return value?.takeRetainedValue() as String? ?? ""
     }
 
-    func set<T>(_ selector: AudioObjectPropertySelector, scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal,
+    func set<T: BitwiseCopyable>(_ selector: AudioObjectPropertySelector, scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal,
                 value: T) throws {
         var a = address(selector, scope)
         var v = value
-        try check(AudioObjectSetPropertyData(self, &a, 0, nil, UInt32(MemoryLayout<T>.size), &v), "Write property \(selector)")
+        try withUnsafeBytes(of: &v) { raw in
+            try check(AudioObjectSetPropertyData(self, &a, 0, nil, UInt32(MemoryLayout<T>.size), raw.baseAddress!), "Write property \(selector)")
+        }
     }
 }
