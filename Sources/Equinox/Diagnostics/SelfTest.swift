@@ -8,7 +8,7 @@ import Foundation
 /// playing at the same time does not disturb the readings.
 @MainActor
 final class SelfTest {
-    private static let toneHz = 1000.0
+    nonisolated private static let toneHz = 1000.0
     private static let toneDB = -30.0
 
     private let audio = AudioController()
@@ -16,6 +16,7 @@ final class SelfTest {
     private var report: [String] = []
     private var failures = 0
     private var player: Process?
+    private var player2: Process?
     private var sampleRate = 48_000.0
 
     private init(output: URL) { self.output = output }
@@ -39,7 +40,7 @@ final class SelfTest {
             check("engine starts", true, "\(name) @ \(Int(rate)) Hz")
         }
 
-        do { try startTone(seconds: 26) } catch {
+        do { player = try startTone(frequency: Self.toneHz, seconds: 45, name: "tone1") } catch {
             check("test tone plays", false, "\(error)")
             finish()
         }
@@ -87,6 +88,7 @@ final class SelfTest {
               "peak \(fmt(Decibels.fromLinear(Double(max(peaks.left, peaks.right))))) dBFS")
 
         await perAppChecks(flat: flat)
+        await multiStripChecks(flat1: flat)
 
         audio.apply(DSPSettings())
         audio.restart()
@@ -99,7 +101,7 @@ final class SelfTest {
         let age = Double(now &- audio.renderer.lastCallbackNanos()) / 1e9
         check("audio callback alive", age < 0.5, "last callback \(String(format: "%.3f", age)) s ago")
 
-        while player?.isRunning == true { await sleep(0.2) }
+        while player?.isRunning == true || player2?.isRunning == true { await sleep(0.2) }
         await sleep(1.0)
         let residual = await measure(DSPSettings())
         check("no feedback after playback stops", residual < -80, "1 kHz residual \(fmt(residual)) dBFS")
@@ -109,7 +111,7 @@ final class SelfTest {
 
     /// Gives afplay (the tone) its own strip and checks per-app volume, mute, EQ and isolation from Other Apps.
     private func perAppChecks(flat: Double) async {
-        let tone = AudioSystem.audioProcesses().filter { $0.executableName == "afplay" }.map(\.objectID)
+        let tone = processObjects(of: player)
         guard !tone.isEmpty else { check("per-app: tone process found", false, "afplay not in HAL process list"); return }
         let key = "exe:afplay"
         audio.setDedicatedStrips([DedicatedStrip(key: key, processes: tone)])
@@ -145,7 +147,7 @@ final class SelfTest {
     // MARK: Measurement
 
     /// Applies settings, lets the ramp settle, then returns the median 1 kHz level of five reads.
-    private func measure(_ settings: DSPSettings) async -> Double {
+    private func measure(_ settings: DSPSettings, frequency: Double = SelfTest.toneHz) async -> Double {
         audio.apply(settings)
         await sleep(0.6)
         var readings: [Double] = []
@@ -153,7 +155,7 @@ final class SelfTest {
         var buffer = [Float](repeating: 0, count: n)
         for _ in 0..<5 {
             audio.analysis.copyLatest(into: &buffer)
-            readings.append(Self.goertzelDB(buffer, frequency: Self.toneHz, sampleRate: sampleRate))
+            readings.append(Self.goertzelDB(buffer, frequency: frequency, sampleRate: sampleRate))
             await sleep(0.05)
         }
         return readings.sorted()[2]
@@ -172,8 +174,8 @@ final class SelfTest {
 
     // MARK: Tone
 
-    private func startTone(seconds: Double) throws {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("equinox-selftest-tone.wav")
+    private func startTone(frequency: Double, seconds: Double, name: String) throws -> Process {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("equinox-selftest-\(name).wav")
         let rate = 48_000.0
         let format = AVAudioFormat(standardFormatWithSampleRate: rate, channels: 1)!
         let frames = AVAudioFrameCount(rate * seconds)
@@ -181,7 +183,7 @@ final class SelfTest {
         buffer.frameLength = frames
         let amplitude = Float(Decibels.toLinear(Self.toneDB))
         let data = buffer.floatChannelData![0]
-        for i in 0..<Int(frames) { data[i] = amplitude * Float(sin(2 * Double.pi * Self.toneHz * Double(i) / rate)) }
+        for i in 0..<Int(frames) { data[i] = amplitude * Float(sin(2 * Double.pi * frequency * Double(i) / rate)) }
         try? FileManager.default.removeItem(at: url)
         let file = try AVAudioFile(forWriting: url, settings: format.settings)
         try file.write(from: buffer)
@@ -190,7 +192,62 @@ final class SelfTest {
         p.executableURL = URL(fileURLWithPath: "/usr/bin/afplay")
         p.arguments = [url.path]
         try p.run()
-        player = p
+        return p
+    }
+
+    private func processObjects(of process: Process?) -> [AudioObjectID] {
+        guard let pid = process?.processIdentifier else { return [] }
+        return AudioSystem.audioProcesses().filter { $0.pid == pid }.map(\.objectID)
+    }
+
+    private func applyStrips(_ strips: [DedicatedStrip]) async -> Bool {
+        audio.setDedicatedStrips(strips)
+        await sleep(0.6)   // debounced rebuild (if any)
+        let ok = await waitForRunning()
+        await sleep(0.8)
+        return ok
+    }
+
+    /// Second tone (2.5 kHz, separate afplay process): checks strip order with 3 strips, tolerance of a dead
+    /// process in a strip, and in-place process retargeting without a session rebuild.
+    private func multiStripChecks(flat1: Double) async {
+        let tone2Hz = 2500.0
+        do { player2 = try startTone(frequency: tone2Hz, seconds: 22, name: "tone2") } catch {
+            check("multi: second tone plays", false, "\(error)"); return
+        }
+        await sleep(1.2)
+        let p1 = processObjects(of: player), p2 = processObjects(of: player2)
+        let flat2 = await measure(DSPSettings(), frequency: tone2Hz)
+        check("multi: second tone captured", flat2 > -45 && !p2.isEmpty, "2.5 kHz at \(fmt(flat2)) dBFS")
+
+        // A strip whose process is gone must not take the session down.
+        let ghost = await applyStrips([DedicatedStrip(key: "ghost", processes: [999_999]), DedicatedStrip(key: "t1", processes: p1)])
+        check("multi: dead process in a strip is tolerated", ghost && Set(audio.activeStripKeys) == ["", "t1"],
+              "strips \(audio.activeStripKeys)")
+
+        // In-place: same keys, more processes → no rebuild, tone 2 moves into strip t1.
+        _ = await applyStrips([DedicatedStrip(key: "t1", processes: p1)])
+        let generation = audio.sessionGeneration
+        _ = await applyStrips([DedicatedStrip(key: "t1", processes: (p1 + p2).sorted())])
+        var s = DSPSettings()
+        s.strips = [StripSettings(key: "t1", volume: 0.5)]
+        let moved1 = await measure(s), moved2 = await measure(s, frequency: tone2Hz)
+        check("multi: helper processes retargeted in place (no rebuild)",
+              audio.sessionGeneration == generation && abs(moved1 - flat1 + 6.02) < 0.6 && abs(moved2 - flat2 + 6.02) < 0.6,
+              "rebuilds \(audio.sessionGeneration - generation), Δ1 \(fmt(moved1 - flat1)), Δ2 \(fmt(moved2 - flat2))")
+
+        // Three strips (Other Apps + 2 apps): each volume lands on the right app, both ways round.
+        let three = await applyStrips([DedicatedStrip(key: "t1", processes: p1), DedicatedStrip(key: "t2", processes: p2)])
+        s.strips = [StripSettings(key: "t1", volume: 0.5), StripSettings(key: "t2", volume: 0.25)]
+        let a1 = await measure(s), a2 = await measure(s, frequency: tone2Hz)
+        s.strips = [StripSettings(key: "t1", volume: 0.25), StripSettings(key: "t2", volume: 0.5)]
+        let b1 = await measure(s), b2 = await measure(s, frequency: tone2Hz)
+        let ok = three && abs(a1 - flat1 + 6.02) < 0.6 && abs(a2 - flat2 + 12.04) < 0.6
+            && abs(b1 - flat1 + 12.04) < 0.6 && abs(b2 - flat2 + 6.02) < 0.6
+        check("multi: 3 strips map to the right apps", ok,
+              "\(audio.activeStripKeys): Δ \(fmt(a1 - flat1))/\(fmt(a2 - flat2)), swapped \(fmt(b1 - flat1))/\(fmt(b2 - flat2))")
+
+        _ = await applyStrips([])
     }
 
     // MARK: Helpers

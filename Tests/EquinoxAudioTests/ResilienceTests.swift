@@ -43,3 +43,15 @@ final class StreamUsageTests: XCTestCase {
         XCTAssertEqual(TapSession.inputStreamUsage(deviceInputStreams: 0, tapStreams: 1), [1])
     }
 }
+
+final class TapOrderTests: XCTestCase {
+    func testStripKeysFollowTheAggregateTapOrder() {
+        let keys = TapSession.orderedKeys(tapOrder: [30, 10, 20], keyForTap: [10: "", 20: "a", 30: "b"])
+        XCTAssertEqual(keys, ["b", "", "a"])
+    }
+
+    func testUnknownOrMissingTapsFallBack() {
+        XCTAssertNil(TapSession.orderedKeys(tapOrder: [10, 99], keyForTap: [10: "", 20: "a"]))
+        XCTAssertNil(TapSession.orderedKeys(tapOrder: [10], keyForTap: [10: "", 20: "a"]))
+    }
+}

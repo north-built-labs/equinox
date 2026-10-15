@@ -61,6 +61,8 @@ public final class AudioController: AudioControlling {
     public var onProcessesChange: (([AudioProcessInfo]) -> Void)?
     public var stripMeters: StripMeters { renderer.stripMeters }
     public var activeStripKeys: [String] { session?.stripKeys ?? [] }
+    /// Increments on every successful session build (diagnostics).
+    public private(set) var sessionGeneration = 0
     private var dedicated: [DedicatedStrip] = []
     private var processSnapshot: [AudioProcessInfo] = []
     private var processPoll: Timer?
@@ -70,7 +72,13 @@ public final class AudioController: AudioControlling {
     public func setDedicatedStrips(_ strips: [DedicatedStrip]) {
         guard strips != dedicated else { return }
         dedicated = strips
-        if session != nil { scheduleRebuild() }
+        // Same apps, different processes (a helper started/exited): retarget the taps in place, no rebuild.
+        if let session, session.updateProcesses(strips) {
+            Self.log.info("Updated tap processes in place")
+            return
+        }
+        // Retry even after a failure: a corrected strip list may succeed.
+        if wantsRunning { scheduleRebuild() }
     }
 
     private func pollProcesses() {
@@ -160,18 +168,33 @@ public final class AudioController: AudioControlling {
         session = nil
     }
 
+    /// Make-before-break: the next session's taps and aggregate are created while the current one keeps
+    /// running; only then is the old IO stopped and the new one started. The old taps stay alive (muting their
+    /// processes) until the new IO runs, so a rebuild never lets unprocessed audio through.
     private func rebuild() {
-        tearDown()
-        guard wantsRunning else { return }
+        guard wantsRunning else { tearDown(); return }
+        let old = session
         do {
             let deviceID = try AudioSystem.defaultOutputDevice()
             let device = try AudioSystem.describe(deviceID)
             let ownProcess = try AudioSystem.processObject(forPID: getpid())
-            let newSession = try TapSession(outputDeviceID: deviceID, excludedProcesses: [ownProcess],
-                                            dedicated: dedicated, renderer: renderer)
-            renderer.submit(DSPConfig(settings: settings, sampleRate: newSession.sampleRate, stripOrder: newSession.stripKeys))
-            try newSession.start()
+            let live = Set(AudioSystem.audioProcesses().map(\.objectID))
+            let strips = dedicated.map { DedicatedStrip(key: $0.key, processes: $0.processes.filter(live.contains)) }
+            let newSession = try TapSession(outputDeviceID: deviceID, excludedProcesses: [ownProcess], dedicated: strips)
+
+            deviceListeners = []
+            old?.stopIO()
+            do {
+                try newSession.prepare(renderer: renderer)
+                renderer.submit(DSPConfig(settings: settings, sampleRate: newSession.sampleRate, stripOrder: newSession.stripKeys))
+                try newSession.startIO()
+            } catch {
+                newSession.invalidate()
+                throw error
+            }
+            old?.invalidate()
             session = newSession
+            sessionGeneration += 1
             sessionStartNanos = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
             deviceListeners = [
                 try? PropertyListener(object: deviceID, selector: kAudioDevicePropertyNominalSampleRate) { [weak self] in
@@ -187,7 +210,7 @@ public final class AudioController: AudioControlling {
             status = .running(deviceName: device.name, sampleRate: newSession.sampleRate)
             onOutputDeviceChange?(device)
             if let v = AudioSystem.hardwareVolume(deviceID) { onHardwareVolumeChange?(v) }
-            Self.log.info("Running on \(device.name) @ \(newSession.sampleRate) Hz")
+            Self.log.info("Running on \(device.name) @ \(newSession.sampleRate) Hz with \(newSession.stripKeys.count) strips")
         } catch {
             tearDown()
             status = .failed(String(describing: error))
