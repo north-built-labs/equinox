@@ -3,6 +3,19 @@ import EquinoxDSP
 import Foundation
 import Observation
 
+public struct MixerStrip: Identifiable, Equatable, Sendable {
+    public let id: String
+    public let name: String
+    public let bundleID: String?
+    public let isOthers: Bool
+    public let isPlaying: Bool
+    public let isDedicated: Bool
+    public let volume: Double
+    public let isMuted: Bool
+    public let isSoloed: Bool
+    public let presetID: UUID?
+}
+
 @MainActor
 @Observable
 public final class AppModel {
@@ -38,6 +51,12 @@ public final class AppModel {
     public var launchAtLogin = false { didSet { applyLaunchAtLogin(oldValue) } }
     public private(set) var lastError: String?
 
+    // MARK: Mixer
+    public private(set) var mixerStrips: [MixerStrip] = []
+    public private(set) var soloKey: String?
+    public var stripMeters: StripMeters { audio.stripMeters }
+    public var activeStripKeys: [String] { audio.activeStripKeys }
+
     // MARK: Private
     @ObservationIgnored private let audio: AudioControlling
     @ObservationIgnored private let store: Store
@@ -47,11 +66,17 @@ public final class AppModel {
     @ObservationIgnored private var applyingExternalVolume = false
     @ObservationIgnored private var restoring = true
     @ObservationIgnored private var saveTask: Task<Void, Never>?
+    @ObservationIgnored private let runningApps: RunningAppsProviding
+    @ObservationIgnored private var appMix: [String: AppMixSettings] = [:]
+    @ObservationIgnored private var appGroups: [AudioAppGroup] = []
+    @ObservationIgnored private var dedicatedKeys: [String] = []
 
-    public init(audio: AudioControlling, store: Store = Store(), loginItem: LoginItemControlling = SystemLoginItem()) {
+    public init(audio: AudioControlling, store: Store = Store(), loginItem: LoginItemControlling = SystemLoginItem(),
+                runningApps: RunningAppsProviding = WorkspaceRunningApps()) {
         self.audio = audio
         self.store = store
         self.loginItem = loginItem
+        self.runningApps = runningApps
 
         let loaded = store.load(AppSettings.self, from: Self.settingsFile)
         let s = loaded.value ?? AppSettings()
@@ -71,13 +96,15 @@ public final class AppModel {
         deviceProfiles = s.deviceProfiles
         hasCompletedOnboarding = s.hasCompletedOnboarding
         launchAtLogin = s.launchAtLogin
+        appMix = s.appMix
         restoring = false
 
         audio.onStatusChange = { [weak self] in self?.status = $0 }
         audio.onOutputDeviceChange = { [weak self] in self?.outputDeviceChanged($0) }
         audio.onHardwareVolumeChange = { [weak self] in self?.hardwareVolumeChanged($0) }
+        audio.onProcessesChange = { [weak self] in self?.processesChanged($0) }
         devices = audio.outputDevices()
-        push()
+        processesChanged(audio.audioProcesses())
     }
 
     // MARK: Lifecycle
@@ -132,7 +159,7 @@ public final class AppModel {
         userPresets[i].bands = working.bands
         userPresets[i].preampDB = working.preampDB
         working = userPresets[i]
-        push()
+        mixerChanged()
     }
 
     public func saveAs(name: String) {
@@ -151,7 +178,12 @@ public final class AppModel {
         for (uid, profile) in deviceProfiles where profile.presetID == id {
             deviceProfiles[uid]?.presetID = Preset.flat.id
         }
-        if selectedPresetID == id { selectPreset(Preset.flat.id) } else { scheduleSave() }
+        for (key, mix) in appMix where mix.presetID == id {
+            var m = mix; m.presetID = nil
+            appMix[key] = m.isDefault ? nil : m
+        }
+        if selectedPresetID == id { selectPreset(Preset.flat.id) }
+        mixerChanged()
     }
 
     public func renamePreset(_ id: UUID, to name: String) {
@@ -171,6 +203,78 @@ public final class AppModel {
 
     public func exportData(for ids: [UUID]) throws -> Data {
         try Preset.exportData(presets.filter { ids.contains($0.id) })
+    }
+
+    // MARK: Mixer
+
+    public func setStripVolume(_ volume: Double, for key: String) {
+        updateMix(key) { $0.volume = min(max(volume, 0), StripSettings.maxVolume) }
+    }
+
+    public func setStripMuted(_ muted: Bool, for key: String) { updateMix(key) { $0.isMuted = muted } }
+
+    public func setStripPreset(_ id: UUID?, for key: String) { updateMix(key) { $0.presetID = id } }
+
+    public func resetStrip(_ key: String) {
+        appMix[key] = nil
+        if soloKey == key { soloKey = nil }
+        mixerChanged()
+    }
+
+    public func toggleSolo(_ key: String) {
+        guard key != StripSettings.othersKey else { return }
+        soloKey = soloKey == key ? nil : key
+        mixerChanged()
+    }
+
+    private func updateMix(_ key: String, _ change: (inout AppMixSettings) -> Void) {
+        var s = appMix[key] ?? AppMixSettings()
+        change(&s)
+        appMix[key] = s.isDefault ? nil : s
+        mixerChanged()
+    }
+
+    private func processesChanged(_ processes: [AudioProcessInfo]) {
+        appGroups = AppGrouping.group(processes, runningApps: runningApps.runningApps(),
+                                      excludingBundleIDs: [Bundle.main.bundleIdentifier ?? "com.pie.equinox", "com.pie.equinox"],
+                                      excludingPIDs: [getpid()])
+        if let solo = soloKey, !appGroups.contains(where: { $0.key == solo }) { soloKey = nil }
+        mixerChanged()
+    }
+
+    /// Recomputes strips and dedicated taps, then pushes audio settings.
+    private func mixerChanged() {
+        let dedicatedGroups = appGroups
+            .filter { appMix[$0.key] != nil || soloKey == $0.key }
+            .sorted { $0.key < $1.key }
+            .prefix(MixBus.maxStrips - 1)
+        dedicatedKeys = dedicatedGroups.map(\.key)
+        audio.setDedicatedStrips(dedicatedGroups.map { DedicatedStrip(key: $0.key, processes: $0.processObjects) })
+
+        let others = appMix[StripSettings.othersKey] ?? AppMixSettings()
+        var strips = [MixerStrip(id: StripSettings.othersKey, name: "Other Apps", bundleID: nil, isOthers: true,
+                                 isPlaying: appGroups.contains { $0.isPlaying && !dedicatedKeys.contains($0.key) },
+                                 isDedicated: true, volume: others.volume, isMuted: others.isMuted,
+                                 isSoloed: false, presetID: others.presetID)]
+        let apps = appGroups.sorted { ($0.isPlaying ? 0 : 1, $0.name) < ($1.isPlaying ? 0 : 1, $1.name) }
+        strips += apps.map { g in
+            let s = appMix[g.key] ?? AppMixSettings()
+            return MixerStrip(id: g.key, name: g.name, bundleID: g.bundleID, isOthers: false, isPlaying: g.isPlaying,
+                              isDedicated: dedicatedKeys.contains(g.key), volume: s.volume, isMuted: s.isMuted,
+                              isSoloed: soloKey == g.key, presetID: s.presetID)
+        }
+        mixerStrips = strips
+        push()
+    }
+
+    private func stripSettings() -> [StripSettings] {
+        ([StripSettings.othersKey] + dedicatedKeys).map { key in
+            let s = appMix[key] ?? AppMixSettings()
+            let preset = s.presetID.flatMap { id in presets.first { $0.id == id } }
+            let soloMuted = soloKey != nil && soloKey != key
+            return StripSettings(key: key, volume: s.volume, isMuted: s.isMuted || soloMuted,
+                                 preampDB: preset?.preampDB ?? 0, bands: preset?.bands ?? [])
+        }
     }
 
     // MARK: Devices
@@ -242,6 +346,7 @@ public final class AppModel {
         s.boostDB = boostDB
         s.balance = balance
         s.isMuted = isMuted
+        s.strips = stripSettings()
         audio.apply(s)
         scheduleSave()
     }
@@ -269,6 +374,7 @@ public final class AppModel {
         s.deviceProfiles = deviceProfiles
         s.hasCompletedOnboarding = hasCompletedOnboarding
         s.launchAtLogin = launchAtLogin
+        s.appMix = appMix
         do { try store.save(s, to: Self.settingsFile) }
         catch { lastError = "Could not save settings: \(error.localizedDescription)" }
     }

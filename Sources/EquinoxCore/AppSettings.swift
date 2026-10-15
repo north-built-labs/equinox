@@ -6,6 +6,18 @@ public struct DeviceProfile: Codable, Equatable, Sendable {
     public init(presetID: UUID, isEnabled: Bool) { self.presetID = presetID; self.isEnabled = isEnabled }
 }
 
+public struct AppMixSettings: Codable, Equatable, Sendable {
+    public var volume: Double = 1
+    public var isMuted = false
+    public var presetID: UUID?
+
+    public init(volume: Double = 1, isMuted: Bool = false, presetID: UUID? = nil) {
+        self.volume = volume; self.isMuted = isMuted; self.presetID = presetID
+    }
+
+    public var isDefault: Bool { volume == 1 && !isMuted && presetID == nil }
+}
+
 /// Persisted state. Every field has a default and decoding tolerates missing keys,
 /// so settings written by older builds always load.
 public struct AppSettings: Codable, Equatable, Sendable {
@@ -20,6 +32,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var deviceProfiles: [String: DeviceProfile] = [:]
     public var hasCompletedOnboarding = false
     public var launchAtLogin = false
+    public var appMix: [String: AppMixSettings] = [:]
     /// Not persisted: number of presets/profiles skipped while decoding because they were unreadable.
     public var droppedEntries = 0
 
@@ -27,7 +40,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case selectedPresetID, workingPreset, userPresets, isEnabled, volume, boostDB, balance, isMuted,
-             deviceProfiles, hasCompletedOnboarding, launchAtLogin
+             deviceProfiles, hasCompletedOnboarding, launchAtLogin, appMix
     }
 
     public init(from decoder: Decoder) throws {
@@ -49,6 +62,9 @@ public struct AppSettings: Codable, Equatable, Sendable {
         droppedEntries += profiles.count - deviceProfiles.count
         hasCompletedOnboarding = (try? c.decodeIfPresent(Bool.self, forKey: .hasCompletedOnboarding)) ?? d.hasCompletedOnboarding
         launchAtLogin = (try? c.decodeIfPresent(Bool.self, forKey: .launchAtLogin)) ?? d.launchAtLogin
+        let mix = (try? c.decodeIfPresent([String: Lossy<AppMixSettings>].self, forKey: .appMix)) ?? [:]
+        appMix = mix.compactMapValues(\.value)
+        droppedEntries += mix.count - appMix.count
     }
 }
 

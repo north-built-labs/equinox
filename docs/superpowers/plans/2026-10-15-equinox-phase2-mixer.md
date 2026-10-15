@@ -848,6 +848,7 @@ Expected: compile failure — `cannot find 'RunningAppInfo' in scope`.
 `Sources/EquinoxCore/AppGrouping.swift`:
 ```swift
 import AppKit
+import CoreAudio
 import EquinoxAudio
 
 public struct RunningAppInfo: Equatable, Sendable {
