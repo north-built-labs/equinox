@@ -1,4 +1,5 @@
 import CoreGraphics
+import EquinoxDSP
 import Foundation
 
 /// Maps between canvas points and (frequency, dB). Log frequency axis 20 Hz–20 kHz, linear ±24 dB.
@@ -28,5 +29,11 @@ public struct EQGeometry: Sendable {
     public func db(atY y: CGFloat) -> Double {
         let v = Double((size.height / 2 - y) / max(size.height / 2, 1)) * Self.dbRange
         return min(max(v, -Self.dbRange), Self.dbRange)
+    }
+
+    /// Curve shown on the canvas: band response only. The preamp is drawn separately so that
+    /// each node sits on the curve it controls.
+    public func curveDB(bands: [EQBand], sampleRate: Double, atX x: CGFloat) -> Double {
+        EQResponse.decibels(bands: bands, preampDB: 0, frequency: frequency(atX: x), sampleRate: sampleRate)
     }
 }

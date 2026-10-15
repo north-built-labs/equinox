@@ -40,6 +40,12 @@ struct EqualizerPage: View {
     @State private var selectedBandID: UUID?
     @State private var graphic = false
 
+    init(model: AppModel, spectrum: SpectrumModel, selectedBandID: UUID? = nil) {
+        self.model = model
+        self.spectrum = spectrum
+        _selectedBandID = State(initialValue: selectedBandID)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {

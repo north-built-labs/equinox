@@ -17,6 +17,7 @@ final class SpectrumModel {
     @ObservationIgnored private var samples: [Float]
     @ObservationIgnored private var timer: Timer?
     @ObservationIgnored private var clients = 0
+    @ObservationIgnored private var isFrozen = false
 
     init(tap: AnalysisTap, sampleRate: @escaping () -> Double) {
         self.tap = tap
@@ -41,7 +42,16 @@ final class SpectrumModel {
         if clients == 0 { timer?.invalidate(); timer = nil }
     }
 
+    /// Diagnostics: show fixed levels and stop polling the tap.
+    func freeze(levels: [Float], peakLeft: Float, peakRight: Float) {
+        isFrozen = true
+        self.levels = levels
+        self.peakLeft = peakLeft
+        self.peakRight = peakRight
+    }
+
     private func tick() {
+        guard !isFrozen else { return }
         tap.copyLatest(into: &samples)
         let fresh = analyzer.analyze(samples, sampleRate: sampleRate())
         var next = levels

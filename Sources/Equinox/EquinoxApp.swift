@@ -22,7 +22,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-@main
 struct EquinoxApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     private let env = AppEnvironment.shared

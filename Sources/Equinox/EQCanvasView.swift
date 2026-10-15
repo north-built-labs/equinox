@@ -135,7 +135,7 @@ struct EQCanvasView: View {
         var curve = Path()
         for i in 0...steps {
             let x = size.width * CGFloat(i) / CGFloat(steps)
-            let db = EQResponse.decibels(bands: bands, preampDB: preamp, frequency: g.frequency(atX: x), sampleRate: rate)
+            let db = g.curveDB(bands: bands, sampleRate: rate, atX: x)
             let p = CGPoint(x: x, y: g.y(forDB: min(max(db, -EQGeometry.dbRange), EQGeometry.dbRange)))
             if i == 0 { curve.move(to: p) } else { curve.addLine(to: p) }
         }
@@ -144,6 +144,15 @@ struct EQCanvasView: View {
         fill.addLine(to: CGPoint(x: 0, y: g.y(forDB: 0)))
         fill.closeSubpath()
         let opacity = enabled ? 1.0 : 0.35
+        if abs(preamp) >= 0.05 {
+            let y = g.y(forDB: preamp)
+            ctx.stroke(Path { $0.move(to: CGPoint(x: 0, y: y)); $0.addLine(to: CGPoint(x: size.width, y: y)) },
+                       with: .color(Theme.violet.opacity(0.7 * opacity)), style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
+            if interactive {
+                ctx.draw(Text(String(format: "Preamp %+.1f dB", preamp)).font(.system(size: 9, weight: .semibold, design: .rounded))
+                            .foregroundStyle(Theme.violet), at: CGPoint(x: size.width - 52, y: y - 8))
+            }
+        }
         ctx.fill(fill, with: .color(Theme.cyan.opacity(0.08 * opacity)))
         ctx.drawLayer { layer in
             layer.addFilter(.blur(radius: 6))

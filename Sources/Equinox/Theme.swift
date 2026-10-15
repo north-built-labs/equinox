@@ -16,18 +16,24 @@ enum Theme {
     }
 }
 
+/// Frosted card drawn with our own layers (not system glass/materials), so it renders identically
+/// on screen and in offscreen snapshots, and text colours stay deterministic.
 struct GlassCard: ViewModifier {
     var cornerRadius: CGFloat = 16
     var padding: CGFloat = 14
 
     func body(content: Content) -> some View {
-        if #available(macOS 26.0, *) {
-            content.padding(padding).glassEffect(.regular, in: .rect(cornerRadius: cornerRadius))
-        } else {
-            content.padding(padding)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: cornerRadius))
-                .overlay(RoundedRectangle(cornerRadius: cornerRadius).strokeBorder(.white.opacity(0.08)))
-        }
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        content
+            .padding(padding)
+            .foregroundStyle(.white)
+            .background(
+                shape.fill(LinearGradient(colors: [Color.white.opacity(0.075), Color.white.opacity(0.025)],
+                                          startPoint: .top, endPoint: .bottom))
+                    .shadow(color: .black.opacity(0.35), radius: 18, y: 8)
+            )
+            .overlay(shape.strokeBorder(LinearGradient(colors: [Color.white.opacity(0.16), Color.white.opacity(0.04)],
+                                                       startPoint: .top, endPoint: .bottom), lineWidth: 1))
     }
 }
 
