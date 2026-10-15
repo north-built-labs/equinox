@@ -1028,8 +1028,9 @@ public final class SpectrumAnalyzer {
         imag = [Float](repeating: 0, count: fftSize / 2)
         power = [Float](repeating: 0, count: fftSize / 2)
         let ratio = maxFrequency / minFrequency
-        edges = (0...bandCount).map { minFrequency * pow(ratio, Double($0) / Double(bandCount)) }
-        frequencies = (0..<bandCount).map { sqrt(edges[$0] * edges[$0 + 1]) }
+        let e = (0...bandCount).map { minFrequency * pow(ratio, Double($0) / Double(bandCount)) }
+        edges = e
+        frequencies = (0..<bandCount).map { sqrt(e[$0] * e[$0 + 1]) }
     }
 
     public func analyze(_ samples: [Float], sampleRate: Double) -> [Float] {
