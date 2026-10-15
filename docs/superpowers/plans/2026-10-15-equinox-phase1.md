@@ -1772,6 +1772,7 @@ public final class TapSession {
 
 `Sources/EquinoxAudio/AudioController.swift`:
 ```swift
+import AudioToolbox
 import CoreAudio
 import EquinoxDSP
 import Foundation
