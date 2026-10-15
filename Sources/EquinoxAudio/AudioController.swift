@@ -48,6 +48,8 @@ public final class AudioController: AudioControlling {
     private var deviceListeners: [PropertyListener] = []
     private var rebuildTask: Task<Void, Never>?
     private var watchdog: Timer?
+    private var stall = StallMonitor()
+    private var sessionStartNanos: UInt64 = 0
 
     public init() {}
 
@@ -75,7 +77,10 @@ public final class AudioController: AudioControlling {
         status = .stopped
     }
 
-    public func restart() { if wantsRunning { rebuild() } else { start() } }
+    public func restart() {
+        stall.reset()
+        if wantsRunning { rebuild() } else { start() }
+    }
 
     public func apply(_ settings: DSPSettings) {
         self.settings = settings
@@ -97,6 +102,7 @@ public final class AudioController: AudioControlling {
     // MARK: - Session lifecycle
 
     private func scheduleRebuild() {
+        stall.reset()   // device/format events give a stalled engine a fresh retry budget
         rebuildTask?.cancel()
         rebuildTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(250))
@@ -127,6 +133,7 @@ public final class AudioController: AudioControlling {
             renderer.submit(DSPConfig(settings: settings, sampleRate: newSession.sampleRate))
             try newSession.start()
             session = newSession
+            sessionStartNanos = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
             deviceListeners = [
                 try? PropertyListener(object: deviceID, selector: kAudioDevicePropertyNominalSampleRate) { [weak self] in
                     MainActor.assumeIsolated { self?.scheduleRebuild() }
@@ -155,10 +162,17 @@ public final class AudioController: AudioControlling {
             MainActor.assumeIsolated {
                 guard let self, self.wantsRunning, self.session != nil else { return }
                 let now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
-                let last = self.renderer.lastCallbackNanos()
-                if last != 0, now > last, now - last > 2_000_000_000 {
-                    Self.log.warning("Audio callback stalled; rebuilding")
+                switch self.stall.evaluate(now: now, lastCallback: self.renderer.lastCallbackNanos(),
+                                           sessionStart: self.sessionStartNanos) {
+                case .healthy:
+                    break
+                case .rebuild:
+                    Self.log.warning("Audio callback stalled; rebuilding (attempt \(self.stall.retries))")
                     self.rebuild()
+                case .giveUp:
+                    Self.log.error("Audio device not responding; pausing processing")
+                    self.tearDown()
+                    self.status = .failed("Audio device isn’t responding. Equinox paused processing so your audio plays normally, and will retry when the output device changes.")
                 }
             }
         }

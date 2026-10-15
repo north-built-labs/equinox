@@ -46,10 +46,34 @@ public final class TapSession {
             try check(AudioDeviceCreateIOProcIDWithBlock(&ioProcID, aggregateID, nil) { _, input, _, output, _ in
                 renderer.render(input: input, output: output)
             }, "Create audio callback")
+            // Keep the output device's own inputs (e.g. a headset mic) off: only the tap is read.
+            // Otherwise starting IO could open the microphone (orange indicator, Bluetooth HFP mode).
+            try? restrictInputToTap(deviceInputStreams: offset)
         } catch {
             invalidate()
             throw error
         }
+    }
+
+    static func inputStreamUsage(deviceInputStreams: Int, tapStreams: Int) -> [UInt32] {
+        Array(repeating: 0, count: deviceInputStreams) + Array(repeating: 1, count: tapStreams)
+    }
+
+    private func restrictInputToTap(deviceInputStreams: Int) throws {
+        guard deviceInputStreams > 0, let ioProcID else { return }
+        let usage = Self.inputStreamUsage(deviceInputStreams: deviceInputStreams, tapStreams: 1)
+        let flagsOffset = MemoryLayout<AudioHardwareIOProcStreamUsage>.offset(of: \.mStreamIsOn)!
+        let countOffset = MemoryLayout<AudioHardwareIOProcStreamUsage>.offset(of: \.mNumberStreams)!
+        let size = flagsOffset + usage.count * MemoryLayout<UInt32>.size
+        let raw = UnsafeMutableRawPointer.allocate(byteCount: size, alignment: MemoryLayout<UnsafeRawPointer>.alignment)
+        defer { raw.deallocate() }
+        raw.storeBytes(of: unsafeBitCast(ioProcID, to: UnsafeMutableRawPointer.self), as: UnsafeMutableRawPointer.self)
+        raw.storeBytes(of: UInt32(usage.count), toByteOffset: countOffset, as: UInt32.self)
+        for (i, on) in usage.enumerated() {
+            raw.storeBytes(of: on, toByteOffset: flagsOffset + i * MemoryLayout<UInt32>.size, as: UInt32.self)
+        }
+        var address = aggregateID.address(kAudioDevicePropertyIOProcStreamUsage, kAudioObjectPropertyScopeInput)
+        try check(AudioObjectSetPropertyData(aggregateID, &address, 0, nil, UInt32(size), raw), "Limit capture to system audio")
     }
 
     public func start() throws {
