@@ -14,7 +14,8 @@ final class FakeAudio: AudioControlling {
     var hasHardwareVolume = true
     var hardwareVolume: Float = -1
     var devices = [AudioDevice(id: 1, uid: "speakers", name: "Speakers", transportType: 0),
-                   AudioDevice(id: 2, uid: "headphones", name: "Headphones", transportType: 0)]
+                   AudioDevice(id: 2, uid: "headphones", name: "Headphones", transportType: 0),
+                   AudioDevice(id: 3, uid: "hdmi", name: "HDMI", transportType: 0, hasHardwareVolume: false)]
 
     func start() { started += 1 }
     func stop() {}
@@ -156,5 +157,67 @@ final class AppModelTests: XCTestCase {
         m.deletePreset(m.selectedPreset.id)
         XCTAssertEqual(m.selectedPreset.id, Preset.flat.id)
         XCTAssertTrue(m.userPresets.isEmpty)
+    }
+
+    // MARK: Review fixes
+
+    func testSoftwareVolumeIsAppliedAfterRelaunchOnDeviceWithoutHardwareVolume() {
+        let m = makeModel()
+        audio.hasHardwareVolume = false
+        audio.onOutputDeviceChange?(audio.devices[2])
+        m.volume = 0.1
+        m.flushSave()
+        let relaunched = makeModel()
+        audio.onOutputDeviceChange?(audio.devices[2])
+        XCTAssertEqual(audio.applied.last?.softwareVolume ?? -1, 0.1, accuracy: 1e-9)
+        XCTAssertEqual(relaunched.volume, 0.1, accuracy: 1e-9)
+    }
+
+    func testSwitchingToDeviceWithoutHardwareVolumeAppliesSoftwareVolume() {
+        let m = makeModel()
+        audio.onOutputDeviceChange?(audio.devices[0])
+        m.volume = 0.4
+        XCTAssertEqual(audio.applied.last?.softwareVolume, 1)
+        audio.onOutputDeviceChange?(audio.devices[2])
+        XCTAssertEqual(audio.applied.last?.softwareVolume ?? -1, 0.4, accuracy: 1e-9)
+        audio.onOutputDeviceChange?(audio.devices[0])
+        XCTAssertEqual(audio.applied.last?.softwareVolume, 1)
+    }
+
+    func testUnsavedEditsSurviveRelaunch() {
+        let m = makeModel()
+        audio.onOutputDeviceChange?(audio.devices[0])
+        m.updateBand(m.working.bands[0].id) { $0.gainDB = 9 }
+        m.flushSave()
+        let m2 = makeModel()
+        audio.onOutputDeviceChange?(audio.devices[0])
+        XCTAssertEqual(m2.working.bands[0].gainDB, 9)
+        XCTAssertTrue(m2.isModified)
+    }
+
+    func testDeviceSwitchWithSamePresetKeepsEdits() {
+        let m = makeModel()
+        audio.onOutputDeviceChange?(audio.devices[0])
+        audio.onOutputDeviceChange?(audio.devices[1])   // headphones profile: same preset (Flat)
+        m.updateBand(m.working.bands[0].id) { $0.gainDB = 7 }
+        audio.onOutputDeviceChange?(audio.devices[0])
+        XCTAssertEqual(m.working.bands[0].gainDB, 7)
+    }
+
+    func testOneUnreadablePresetIsDroppedAndFileBackedUp() throws {
+        let good = Preset(name: "Good", bands: [EQBand(frequency: 100, gainDB: 3)])
+        var json = String(data: try JSONEncoder().encode(AppSettings()), encoding: .utf8)!
+        let goodJSON = String(data: try JSONEncoder().encode(good), encoding: .utf8)!
+        let badJSON = goodJSON.replacingOccurrences(of: "\"peak\"", with: "\"bogus\"").replacingOccurrences(of: "Good", with: "Bad")
+        json = json.replacingOccurrences(of: "\"userPresets\":[]", with: "\"userPresets\":[\(goodJSON),\(badJSON)]")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try Data(json.utf8).write(to: dir.appendingPathComponent("settings.json"))
+
+        let m = makeModel()
+        XCTAssertEqual(m.userPresets.map(\.name), ["Good"])
+        XCTAssertNotNil(m.lastError)
+        let files = try FileManager.default.contentsOfDirectory(atPath: dir.path)
+        XCTAssertTrue(files.contains { $0.hasPrefix("settings.json.corrupt-") })
+        XCTAssertTrue(files.contains("settings.json"))
     }
 }

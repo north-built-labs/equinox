@@ -23,6 +23,13 @@ public final class Store {
         }
     }
 
+    /// Copies `name` to `<name>.corrupt-<unix-time>` before it is overwritten.
+    public func backup(_ name: String) {
+        let url = directory.appendingPathComponent(name)
+        let copy = directory.appendingPathComponent("\(name).corrupt-\(Int(Date().timeIntervalSince1970))")
+        try? FileManager.default.copyItem(at: url, to: copy)
+    }
+
     public func save<T: Encodable>(_ value: T, to name: String) throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let encoder = JSONEncoder()

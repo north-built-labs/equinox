@@ -7,9 +7,12 @@ public struct AudioDevice: Identifiable, Hashable, Sendable {
     public let uid: String
     public let name: String
     public let transportType: UInt32
+    /// Whether the device exposes a settable hardware volume; if not, Equinox applies volume in software.
+    public let hasHardwareVolume: Bool
 
-    public init(id: AudioObjectID, uid: String, name: String, transportType: UInt32) {
+    public init(id: AudioObjectID, uid: String, name: String, transportType: UInt32, hasHardwareVolume: Bool = true) {
         self.id = id; self.uid = uid; self.name = name; self.transportType = transportType
+        self.hasHardwareVolume = hasHardwareVolume
     }
 }
 
@@ -26,7 +29,9 @@ public enum AudioSystem {
         AudioDevice(id: id,
                     uid: try id.getString(kAudioDevicePropertyDeviceUID),
                     name: try id.getString(kAudioObjectPropertyName),
-                    transportType: (try? id.get(kAudioDevicePropertyTransportType, initial: UInt32(0))) ?? 0)
+                    transportType: (try? id.get(kAudioDevicePropertyTransportType, initial: UInt32(0))) ?? 0,
+                    hasHardwareVolume: id.isSettable(kAudioHardwareServiceDeviceProperty_VirtualMainVolume,
+                                                     scope: kAudioObjectPropertyScopeOutput))
     }
 
     public static func defaultOutputDevice() throws -> AudioObjectID {

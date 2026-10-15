@@ -20,6 +20,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var deviceProfiles: [String: DeviceProfile] = [:]
     public var hasCompletedOnboarding = false
     public var launchAtLogin = false
+    /// Not persisted: number of presets/profiles skipped while decoding because they were unreadable.
+    public var droppedEntries = 0
 
     public init() {}
 
@@ -33,14 +35,25 @@ public struct AppSettings: Codable, Equatable, Sendable {
         let d = AppSettings()
         selectedPresetID = (try? c.decodeIfPresent(UUID.self, forKey: .selectedPresetID)) ?? d.selectedPresetID
         workingPreset = try? c.decodeIfPresent(Preset.self, forKey: .workingPreset)
-        userPresets = (try? c.decodeIfPresent([Preset].self, forKey: .userPresets)) ?? d.userPresets
+        // Decode element by element so one unreadable preset/profile doesn't wipe the rest.
+        let presets = (try? c.decodeIfPresent([Lossy<Preset>].self, forKey: .userPresets)) ?? []
+        userPresets = presets.compactMap(\.value)
+        droppedEntries += presets.count - userPresets.count
         isEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .isEnabled)) ?? d.isEnabled
         volume = (try? c.decodeIfPresent(Double.self, forKey: .volume)) ?? d.volume
         boostDB = (try? c.decodeIfPresent(Double.self, forKey: .boostDB)) ?? d.boostDB
         balance = (try? c.decodeIfPresent(Double.self, forKey: .balance)) ?? d.balance
         isMuted = (try? c.decodeIfPresent(Bool.self, forKey: .isMuted)) ?? d.isMuted
-        deviceProfiles = (try? c.decodeIfPresent([String: DeviceProfile].self, forKey: .deviceProfiles)) ?? d.deviceProfiles
+        let profiles = (try? c.decodeIfPresent([String: Lossy<DeviceProfile>].self, forKey: .deviceProfiles)) ?? [:]
+        deviceProfiles = profiles.compactMapValues(\.value)
+        droppedEntries += profiles.count - deviceProfiles.count
         hasCompletedOnboarding = (try? c.decodeIfPresent(Bool.self, forKey: .hasCompletedOnboarding)) ?? d.hasCompletedOnboarding
         launchAtLogin = (try? c.decodeIfPresent(Bool.self, forKey: .launchAtLogin)) ?? d.launchAtLogin
     }
+}
+
+/// Decodes a value if possible, otherwise records nil instead of failing the enclosing container.
+private struct Lossy<T: Decodable>: Decodable {
+    let value: T?
+    init(from decoder: Decoder) throws { value = try? T(from: decoder) }
 }

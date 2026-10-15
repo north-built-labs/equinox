@@ -56,6 +56,10 @@ public final class AppModel {
         let loaded = store.load(AppSettings.self, from: Self.settingsFile)
         let s = loaded.value ?? AppSettings()
         if loaded.wasCorrupt { lastError = "Settings file was unreadable and has been reset." }
+        if s.droppedEntries > 0 {
+            store.backup(Self.settingsFile)
+            lastError = "Some saved presets couldn't be read and were skipped. The original settings file was backed up."
+        }
         userPresets = s.userPresets
         selectedPresetID = presets.contains { $0.id == s.selectedPresetID } ? s.selectedPresetID : Preset.flat.id
         working = s.workingPreset.flatMap { $0.id == selectedPresetID ? $0 : nil } ?? selectedPreset
@@ -177,10 +181,14 @@ public final class AppModel {
 
     private func outputDeviceChanged(_ device: AudioDevice) {
         refreshDevices()
-        guard device.uid != currentDevice?.uid else { return }
+        // Volume mode follows the device, not the last slider write (a device without hardware
+        // volume must keep getting the saved software volume after relaunch or a device switch).
+        usesSoftwareVolume = !device.hasHardwareVolume
+        guard device.uid != currentDevice?.uid else { push(); return }
         currentDevice = device
         if let profile = deviceProfiles[device.uid] {
-            if presets.contains(where: { $0.id == profile.presetID }) {
+            // Only switch presets when the device remembers a different one; otherwise keep unsaved edits.
+            if profile.presetID != selectedPresetID, presets.contains(where: { $0.id == profile.presetID }) {
                 selectedPresetID = profile.presetID
                 working = selectedPreset
             }
