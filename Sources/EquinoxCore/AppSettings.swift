@@ -33,6 +33,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var hasCompletedOnboarding = false
     public var launchAtLogin = false
     public var appMix: [String: AppMixSettings] = [:]
+    public var disabledPlugins: [String] = []
     /// Not persisted: number of presets/profiles skipped while decoding because they were unreadable.
     public var droppedEntries = 0
 
@@ -40,7 +41,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case selectedPresetID, workingPreset, userPresets, isEnabled, volume, boostDB, balance, isMuted,
-             deviceProfiles, hasCompletedOnboarding, launchAtLogin, appMix
+             deviceProfiles, hasCompletedOnboarding, launchAtLogin, appMix, disabledPlugins
     }
 
     public init(from decoder: Decoder) throws {
@@ -64,6 +65,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         launchAtLogin = (try? c.decodeIfPresent(Bool.self, forKey: .launchAtLogin)) ?? d.launchAtLogin
         let mix = (try? c.decodeIfPresent([String: Lossy<AppMixSettings>].self, forKey: .appMix)) ?? [:]
         appMix = mix.compactMapValues(\.value)
+        disabledPlugins = (try? c.decodeIfPresent([String].self, forKey: .disabledPlugins)) ?? []
         droppedEntries += mix.count - appMix.count
     }
 }

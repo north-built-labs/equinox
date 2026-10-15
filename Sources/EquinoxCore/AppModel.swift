@@ -1,3 +1,4 @@
+import AVFoundation
 import EquinoxAudio
 import EquinoxDSP
 import Foundation
@@ -35,7 +36,10 @@ public final class AppModel {
     public private(set) var working: Preset = Preset.flat
     public var presets: [Preset] { Preset.builtIns + userPresets }
     public var selectedPreset: Preset { presets.first { $0.id == selectedPresetID } ?? Preset.flat }
-    public var isModified: Bool { working.bands != selectedPreset.bands || working.preampDB != selectedPreset.preampDB }
+    public var isModified: Bool {
+        working.bands != selectedPreset.bands || working.preampDB != selectedPreset.preampDB
+            || working.effects.map(\.structure) != selectedPreset.effects.map(\.structure)
+    }
 
     // MARK: Controls
     public var isEnabled = true { didSet { recordDeviceProfile(); push() } }
@@ -57,6 +61,10 @@ public final class AppModel {
     public var stripMeters: StripMeters { audio.stripMeters }
     public var activeStripKeys: [String] { audio.activeStripKeys }
 
+    // MARK: Effects
+    public private(set) var availablePlugins: [AudioUnitID] = []
+    public private(set) var disabledPluginKeys: Set<String> = []
+
     // MARK: Private
     @ObservationIgnored private let audio: AudioControlling
     @ObservationIgnored private let store: Store
@@ -70,9 +78,10 @@ public final class AppModel {
     @ObservationIgnored private var appMix: [String: AppMixSettings] = [:]
     @ObservationIgnored private var appGroups: [AudioAppGroup] = []
     @ObservationIgnored private var dedicatedKeys: [String] = []
+    @ObservationIgnored private var lastPushedEffects: [EffectSlot]?
 
     public init(audio: AudioControlling, store: Store = Store(), loginItem: LoginItemControlling = SystemLoginItem(),
-                runningApps: RunningAppsProviding = WorkspaceRunningApps()) {
+                runningApps: RunningAppsProviding = WorkspaceRunningApps(), crashedPlugin: AudioUnitID? = nil) {
         self.audio = audio
         self.store = store
         self.loginItem = loginItem
@@ -84,6 +93,10 @@ public final class AppModel {
         if s.droppedEntries > 0 {
             store.backup(Self.settingsFile)
             lastError = "Some saved presets couldn't be read and were skipped. The original settings file was backed up."
+        }
+        if let crashedPlugin {
+            disabledPluginKeys.insert(crashedPlugin.key)
+            lastError = "\(crashedPlugin.name) crashed while loading and was turned off. You can turn it back on in Effects."
         }
         userPresets = s.userPresets
         selectedPresetID = presets.contains { $0.id == s.selectedPresetID } ? s.selectedPresetID : Preset.flat.id
@@ -97,6 +110,7 @@ public final class AppModel {
         hasCompletedOnboarding = s.hasCompletedOnboarding
         launchAtLogin = s.launchAtLogin
         appMix = s.appMix
+        disabledPluginKeys.formUnion(s.disabledPlugins)
         restoring = false
 
         audio.onStatusChange = { [weak self] in self?.status = $0 }
@@ -104,6 +118,7 @@ public final class AppModel {
         audio.onHardwareVolumeChange = { [weak self] in self?.hardwareVolumeChanged($0) }
         audio.onProcessesChange = { [weak self] in self?.processesChanged($0) }
         devices = audio.outputDevices()
+        availablePlugins = audio.installedPlugins()
         processesChanged(audio.audioProcesses())
     }
 
@@ -156,16 +171,19 @@ public final class AppModel {
     /// Saves edits into the selected user preset (built-ins are read-only; use saveAs).
     public func save() {
         guard let i = userPresets.firstIndex(where: { $0.id == selectedPresetID }) else { return }
+        captureEffectStates()
         userPresets[i].bands = working.bands
+        userPresets[i].effects = working.effects
         userPresets[i].preampDB = working.preampDB
         working = userPresets[i]
         mixerChanged()
     }
 
     public func saveAs(name: String) {
+        captureEffectStates()
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let preset = Preset(name: trimmed.isEmpty ? "Untitled" : trimmed, preampDB: working.preampDB,
-                            bands: working.bands, isBuiltIn: false)
+                            bands: working.bands, isBuiltIn: false, effects: working.effects)
         userPresets.append(preset)
         selectPreset(preset.id)
     }
@@ -283,6 +301,58 @@ public final class AppModel {
         }
     }
 
+    // MARK: Effects
+
+    @discardableResult
+    public func addEffect(_ kind: EffectKind) -> UUID {
+        let slot = EffectSlot(kind: kind)
+        working.effects.append(slot)
+        push()
+        return slot.id
+    }
+
+    public func removeEffect(_ id: UUID) {
+        working.effects.removeAll { $0.id == id }
+        push()
+    }
+
+    public func moveEffect(_ id: UUID, by offset: Int) {
+        guard let i = working.effects.firstIndex(where: { $0.id == id }) else { return }
+        let j = min(max(i + offset, 0), working.effects.count - 1)
+        guard i != j else { return }
+        working.effects.swapAt(i, j)
+        push()
+    }
+
+    public func setEffectEnabled(_ id: UUID, _ enabled: Bool) {
+        guard let i = working.effects.firstIndex(where: { $0.id == id }) else { return }
+        working.effects[i].isEnabled = enabled
+        push()
+    }
+
+    public func isDisabledByCrash(_ slot: EffectSlot) -> Bool {
+        if case .audioUnit(let id) = slot.kind { return disabledPluginKeys.contains(id.key) }
+        return false
+    }
+
+    public func reenablePlugin(_ key: String) {
+        disabledPluginKeys.remove(key)
+        push()
+    }
+
+    public func effectUnit(for id: UUID) -> AUAudioUnit? { audio.effectUnit(for: id) }
+
+    public func refreshPlugins() { availablePlugins = audio.installedPlugins() }
+
+    /// Copies live plugin parameter state into the working preset's slots.
+    private func captureEffectStates() {
+        let states = audio.captureEffectStates()
+        guard !states.isEmpty else { return }
+        for i in working.effects.indices {
+            if let state = states[working.effects[i].id] { working.effects[i].state = state }
+        }
+    }
+
     // MARK: Devices
 
     public func refreshDevices() { devices = audio.outputDevices() }
@@ -354,6 +424,11 @@ public final class AppModel {
         s.isMuted = isMuted
         s.strips = stripSettings()
         audio.apply(s)
+        let effects = working.effects.filter { !isDisabledByCrash($0) }
+        if effects.map(\.structure) != lastPushedEffects?.map(\.structure) {
+            audio.setEffects(effects)
+            lastPushedEffects = effects
+        }
         scheduleSave()
     }
 
@@ -368,6 +443,7 @@ public final class AppModel {
 
     public func flushSave() {
         saveTask?.cancel()
+        captureEffectStates()
         var s = AppSettings()
         s.selectedPresetID = selectedPresetID
         s.workingPreset = working
@@ -381,6 +457,7 @@ public final class AppModel {
         s.hasCompletedOnboarding = hasCompletedOnboarding
         s.launchAtLogin = launchAtLogin
         s.appMix = appMix
+        s.disabledPlugins = disabledPluginKeys.sorted()
         do { try store.save(s, to: Self.settingsFile) }
         catch { lastError = "Could not save settings: \(error.localizedDescription)" }
     }
