@@ -4,19 +4,19 @@ import Foundation
 import os
 import Synchronization
 
-/// Hands immutable configs from the main thread to the audio thread without blocking it.
+/// Hands immutable objects from the main thread to the audio thread without blocking it.
 /// Configs are retired by acknowledgement: the main thread keeps every config the audio thread
 /// might still hold until the audio thread reports it has moved past it, so the audio thread's
 /// release is never the last one (no free() on the IO thread).
-final class ConfigMailbox: @unchecked Sendable {
+final class Mailbox<Value: AnyObject>: @unchecked Sendable {
     final class Entry: @unchecked Sendable {
-        let config: DSPConfig
+        let value: Value
         let generation: Int
-        init(config: DSPConfig, generation: Int) { self.config = config; self.generation = generation }
+        init(value: Value, generation: Int) { self.value = value; self.generation = generation }
     }
 
     /// Safety cap for when the audio thread is not running and never acknowledges.
-    private static let maxHistory = 512
+    private static var maxHistory: Int { 512 }
 
     private let pending = OSAllocatedUnfairLock<Entry?>(initialState: nil)
     private let acknowledged = Atomic<Int>(0)
@@ -24,8 +24,8 @@ final class ConfigMailbox: @unchecked Sendable {
     private var nextGeneration = 1
 
     /// Main thread.
-    func post(_ config: DSPConfig) {
-        let entry = Entry(config: config, generation: nextGeneration)
+    func post(_ value: Value) {
+        let entry = Entry(value: value, generation: nextGeneration)
         nextGeneration += 1
         let inUse = acknowledged.load(ordering: .acquiring)
         history.removeAll { $0.generation < inUse }
@@ -53,12 +53,25 @@ final class ConfigMailbox: @unchecked Sendable {
     }
 }
 
+typealias ConfigMailbox = Mailbox<DSPConfig>
+
+/// Lets the effects mailbox carry "no chain".
+final class EffectsBox: @unchecked Sendable {
+    let chain: EffectsChain?
+    init(_ chain: EffectsChain?) { self.chain = chain }
+}
+
 /// Owns the realtime render path invoked by the aggregate device's IOProc.
 public final class Renderer: @unchecked Sendable {
     public static let maxFrames = 4096
     static let capacity = maxFrames * 4
 
     public let analysis = AnalysisTap()
+    private let effectsMailbox = Mailbox<EffectsBox>()
+    private var effects: Mailbox<EffectsBox>.Entry?
+
+    /// Main thread. nil removes the chain.
+    public func submitEffects(_ chain: EffectsChain?) { effectsMailbox.post(EffectsBox(chain)) }
     public let stripMeters = StripMeters()
     private var mixBus = MixBus(stripCount: 1, maxFrames: Renderer.capacity)
     private var stripCount = 1
@@ -91,6 +104,8 @@ public final class Renderer: @unchecked Sendable {
         self.stripCount = mixBus.stripCount
         current = nil
         mailbox.reset()
+        effects = nil
+        effectsMailbox.reset()
         self.inputStreamOffset = inputStreamOffset
     }
 
@@ -107,8 +122,8 @@ public final class Renderer: @unchecked Sendable {
         if let entry = mailbox.take() {
             current = entry                 // previous entry is still owned by the mailbox history
             mailbox.acknowledge(entry)
-            processor.apply(entry.config)
-            mixBus.apply(entry.config.strips)
+            processor.apply(entry.value)
+            mixBus.apply(entry.value.strips)
         }
         mixL.update(repeating: 0, count: frames)
         mixR.update(repeating: 0, count: frames)
@@ -117,7 +132,17 @@ public final class Renderer: @unchecked Sendable {
             mixBus.accumulate(strip: strip, left: left, right: right, intoLeft: mixL, intoRight: mixR, frames: frames)
             stripMeters.record(strip: strip, left: left, right: right, frames: frames)
         }
-        if current != nil { processor.process(left: mixL, right: mixR, frames: frames) }
+        if let fxEntry = effectsMailbox.take() {
+            effects = fxEntry                  // previous chain is still owned by the mailbox history
+            effectsMailbox.acknowledge(fxEntry)
+        }
+        if let config = current?.value {
+            processor.processPre(left: mixL, right: mixR, frames: frames)
+            if !config.isBypassed, let chain = effects?.value.chain {
+                chain.render(left: mixL, right: mixR, frames: frames)
+            }
+            processor.processPost(left: mixL, right: mixR, frames: frames)
+        }
         analysis.write(left: mixL, right: mixR, frames: frames)
         ChannelIO.writeStereo(left: mixL, right: mixR, frames: frames, to: out)
     }

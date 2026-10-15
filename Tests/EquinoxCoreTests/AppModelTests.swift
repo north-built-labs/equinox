@@ -1,3 +1,4 @@
+import AVFoundation
 import XCTest
 @testable import EquinoxCore
 import EquinoxAudio
@@ -16,6 +17,12 @@ final class FakeAudio: AudioControlling {
     var dedicated: [DedicatedStrip] = []
     func audioProcesses() -> [AudioProcessInfo] { processes }
     func setDedicatedStrips(_ strips: [DedicatedStrip]) { dedicated = strips }
+    var effects: [EffectSlot] = []
+    var effectStates: [UUID: Data] = [:]
+    func setEffects(_ slots: [EffectSlot]) { effects = slots }
+    func effectUnit(for id: UUID) -> AUAudioUnit? { nil }
+    func captureEffectStates() -> [UUID: Data] { effectStates }
+    func installedPlugins() -> [AudioUnitID] { [] }
     var applied: [DSPSettings] = []
     var started = 0
     var hasHardwareVolume = true

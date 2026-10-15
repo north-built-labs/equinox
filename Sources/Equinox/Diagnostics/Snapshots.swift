@@ -1,3 +1,4 @@
+import AVFoundation
 import AppKit
 import EquinoxAudio
 import EquinoxCore
@@ -85,6 +86,12 @@ final class PreviewAudio: AudioControlling {
     var dedicated: [DedicatedStrip] = []
     func audioProcesses() -> [AudioProcessInfo] { processes }
     func setDedicatedStrips(_ strips: [DedicatedStrip]) { dedicated = strips }
+    var effects: [EffectSlot] = []
+    var effectStates: [UUID: Data] = [:]
+    func setEffects(_ slots: [EffectSlot]) { effects = slots }
+    func effectUnit(for id: UUID) -> AUAudioUnit? { nil }
+    func captureEffectStates() -> [UUID: Data] { effectStates }
+    func installedPlugins() -> [AudioUnitID] { PluginCatalog.installedEffects() }
     private let devices = [AudioDevice(id: 1, uid: "speakers", name: "MacBook Pro Speakers", transportType: 0),
                            AudioDevice(id: 2, uid: "airpods", name: "AirPods Pro", transportType: 0)]
 

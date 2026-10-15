@@ -1,4 +1,5 @@
 import AudioToolbox
+import AVFoundation
 import CoreAudio
 import EquinoxDSP
 import Foundation
@@ -33,6 +34,11 @@ public protocol AudioControlling: AnyObject {
     func audioProcesses() -> [AudioProcessInfo]
     /// Apps that need their own tap. Changing the set rebuilds the session (debounced).
     func setDedicatedStrips(_ strips: [DedicatedStrip])
+    /// Effect chain in order. Same slots with different enablement are toggled live; anything else rebuilds.
+    func setEffects(_ slots: [EffectSlot])
+    func effectUnit(for id: UUID) -> AUAudioUnit?
+    func captureEffectStates() -> [UUID: Data]
+    func installedPlugins() -> [AudioUnitID]
 }
 
 @MainActor
@@ -88,7 +94,45 @@ public final class AudioController: AudioControlling {
         onProcessesChange?(now)
     }
 
-    public init() {}
+    private let pluginGuard: PluginGuard?
+    private var effectSlots: [EffectSlot] = []
+    private var chain: EffectsChain?
+    private var chainBuild = 0
+
+    public init(pluginGuard: PluginGuard? = nil) { self.pluginGuard = pluginGuard }
+
+    public func setEffects(_ slots: [EffectSlot]) {
+        effectSlots = slots
+        if let chain, chain.slots.map(\.id) == slots.map(\.id), chain.slots.map(\.kind) == slots.map(\.kind) {
+            for s in slots { chain.setBypassed(s.id, !s.isEnabled) }
+            return
+        }
+        buildChain()
+    }
+
+    public func effectUnit(for id: UUID) -> AUAudioUnit? { chain?.unit(for: id) }
+    public func captureEffectStates() -> [UUID: Data] { chain?.captureStates() ?? [:] }
+    public func installedPlugins() -> [AudioUnitID] { PluginCatalog.installedEffects() }
+
+    /// Builds a new chain off the audio thread, carrying live parameter state over; the newest build wins.
+    private func buildChain() {
+        chainBuild += 1
+        let build = chainBuild
+        let rate = session?.sampleRate ?? chain?.sampleRate ?? 48_000
+        let live = chain?.captureStates() ?? [:]
+        let slots = effectSlots.map { slot -> EffectSlot in
+            var s = slot
+            if let state = live[s.id] { s.state = state }
+            return s
+        }
+        let loader = EffectLoader(pluginGuard: pluginGuard)
+        Task { @MainActor [weak self] in
+            let built = slots.isEmpty ? nil : try? await EffectsChain.make(slots: slots, sampleRate: rate, loader: loader)
+            guard let self, build == self.chainBuild else { return }
+            self.chain = built
+            self.renderer.submitEffects(built)
+        }
+    }
 
     public func start() {
         wantsRunning = true
@@ -187,6 +231,7 @@ public final class AudioController: AudioControlling {
             do {
                 try newSession.prepare(renderer: renderer)
                 renderer.submit(DSPConfig(settings: settings, sampleRate: newSession.sampleRate, stripOrder: newSession.stripKeys))
+                if let chain, chain.sampleRate == newSession.sampleRate { renderer.submitEffects(chain) }
                 try newSession.startIO()
             } catch {
                 newSession.invalidate()
@@ -194,6 +239,8 @@ public final class AudioController: AudioControlling {
             }
             old?.invalidate()
             session = newSession
+            if let chain, chain.sampleRate != newSession.sampleRate { buildChain() }
+            else if chain == nil, !effectSlots.isEmpty { buildChain() }
             sessionGeneration += 1
             sessionStartNanos = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
             deviceListeners = [
