@@ -10,7 +10,9 @@ final class AppEnvironment {
     let meters: MixerMeters
 
     private init() {
-        let model = AppModel(audio: AudioController())
+        let pluginGuard = PluginGuard(directory: Store.defaultDirectory)
+        let crashed = pluginGuard.takeCrashedPlugin()
+        let model = AppModel(audio: AudioController(pluginGuard: pluginGuard), crashedPlugin: crashed)
         self.model = model
         spectrum = SpectrumModel(tap: model.analysis, sampleRate: { [weak model] in model?.sampleRate ?? 48_000 })
         meters = MixerMeters(model: model)

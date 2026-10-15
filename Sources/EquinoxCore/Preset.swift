@@ -66,8 +66,17 @@ public struct Preset: Codable, Hashable, Identifiable, Sendable {
                    preampDB: min(max(p.preampDB.isFinite ? p.preampDB : 0, -24), 24),
                    bands: p.bands.prefix(BiquadBank.maxSections).map { var b = $0.clamped(); b.id = UUID(); return b },
                    isBuiltIn: false,
-                   effects: p.effects.map { var s = $0; s.id = UUID(); return s })
+                   effects: p.effects.map(sanitizedForImport))
         }
+    }
+
+    /// Imported files are untrusted: third-party plugin state is dropped (the plugin starts at its defaults) so a
+    /// crafted preset can't feed arbitrary data to an in-process plugin's state parser. Built-in Apple effects keep it.
+    static func sanitizedForImport(_ slot: EffectSlot) -> EffectSlot {
+        var s = slot
+        s.id = UUID()
+        if case .audioUnit = s.kind { s.state = nil }
+        return s
     }
 
     public static func exportData(_ presets: [Preset]) throws -> Data {

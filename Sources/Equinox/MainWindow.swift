@@ -3,12 +3,13 @@ import EquinoxCore
 import SwiftUI
 
 enum Page: String, CaseIterable, Identifiable {
-    case equalizer = "Equalizer", mixer = "Mixer", settings = "Settings"
+    case equalizer = "Equalizer", mixer = "Mixer", effects = "Effects", settings = "Settings"
     var id: String { rawValue }
     var icon: String {
         switch self {
         case .equalizer: "slider.vertical.3"
         case .mixer: "slider.horizontal.below.square.and.square.filled"
+        case .effects: "wand.and.stars"
         case .settings: "gearshape"
         }
     }
@@ -30,6 +31,7 @@ struct MainWindow: View {
                 switch page {
                 case .equalizer: EqualizerPage(model: model, spectrum: spectrum)
                 case .mixer: MixerPage(model: model, meters: meters)
+                case .effects: EffectsPage(model: model)
                 case .settings: SettingsPage(model: model)
                 }
             }

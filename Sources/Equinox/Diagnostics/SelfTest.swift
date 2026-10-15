@@ -40,7 +40,7 @@ final class SelfTest {
             check("engine starts", true, "\(name) @ \(Int(rate)) Hz")
         }
 
-        do { player = try startTone(frequency: Self.toneHz, seconds: 45, name: "tone1") } catch {
+        do { player = try startTone(frequency: Self.toneHz, seconds: 60, name: "tone1") } catch {
             check("test tone plays", false, "\(error)")
             finish()
         }
@@ -89,6 +89,7 @@ final class SelfTest {
 
         await perAppChecks(flat: flat)
         await multiStripChecks(flat1: flat)
+        await effectsChecks(flat: flat)
 
         audio.apply(DSPSettings())
         audio.restart()
@@ -142,6 +143,44 @@ final class SelfTest {
         await sleep(0.6)
         _ = await waitForRunning()
         await sleep(0.8)
+    }
+
+    /// Built-in limiter (+6 dB pre-gain) in the live chain, live bypass without rebuild, an installed Audio Unit
+    /// through the plugin path, and removal.
+    private func effectsChecks(flat: Double) async {
+        var limiter = EffectSlot(kind: .builtIn(.limiter))
+        audio.setEffects([limiter])
+        await sleep(0.8)
+        guard let unit = audio.effectUnit(for: limiter.id) else { check("effects: limiter loads", false, "no unit"); return }
+        unit.parameterTree?.parameter(withAddress: 2)?.value = 6
+        let boosted = await measure(DSPSettings())
+        check("effects: limiter +6 dB pre-gain in live chain", abs(boosted - flat - 6) < 0.5, "Δ \(fmt(boosted - flat)) dB")
+
+        limiter.isEnabled = false
+        audio.setEffects([limiter])
+        let bypassed = await measure(DSPSettings())
+        check("effects: live bypass (same engine)", abs(bypassed - flat) < 0.5 && audio.effectUnit(for: limiter.id) === unit,
+              "Δ \(fmt(bypassed - flat)) dB")
+
+        var masterOff = DSPSettings(); masterOff.isBypassed = true
+        limiter.isEnabled = true
+        audio.setEffects([limiter])
+        let off = await measure(masterOff)
+        check("effects: Equinox off skips effects", abs(off - flat) < 0.5, "Δ \(fmt(off - flat)) dB")
+
+        if let bandpass = PluginCatalog.installedEffects().first(where: { $0.name.contains("AUBandpass") }) {
+            audio.setEffects([EffectSlot(kind: .audioUnit(bandpass))])
+            await sleep(0.8)
+            let filtered = await measure(DSPSettings())
+            check("effects: installed Audio Unit (AUBandpass) runs", filtered < flat - 6, "Δ \(fmt(filtered - flat)) dB")
+        }
+
+        // Rapid structural edits: only the newest chain may win.
+        for kind in [BuiltInEffect.reverb, .delay, .compressor] { audio.setEffects([EffectSlot(kind: .builtIn(kind))]) }
+        audio.setEffects([])
+        await sleep(1.0)
+        let cleared = await measure(DSPSettings())
+        check("effects: rapid edits converge to the last (none)", abs(cleared - flat) < 0.5, "Δ \(fmt(cleared - flat)) dB")
     }
 
     // MARK: Measurement

@@ -25,6 +25,12 @@ enum Snapshots {
             model.setStripVolume(0.45, for: "com.google.Chrome")
             model.setStripMuted(true, for: "us.zoom.xos")
             let meters = MixerMeters(model: model)
+            _ = model.addEffect(.builtIn(.reverb))
+            let comp = model.addEffect(.builtIn(.compressor))
+            model.setEffectEnabled(comp, false)
+            if let bp = PluginCatalog.installedEffects().first(where: { $0.name.contains("AUBandpass") }) {
+                _ = model.addEffect(.audioUnit(bp))
+            }
             meters.freeze(["": 0.35, "com.apple.Music": 0.8, "com.google.Chrome": 0.3])
 
             let spectrum = SpectrumModel(tap: model.analysis, sampleRate: { 48_000 })
@@ -39,6 +45,14 @@ enum Snapshots {
                 .frame(width: 900).background(bg), dir)
             save("graphic", GraphicEQView(model: model).padding(18).frame(width: 760).glassCard().padding(24).background(bg), dir)
             save("mixer", MixerPage(model: model, meters: meters).frame(width: 900).background(bg), dir)
+            save("effects", EffectsPage(model: model).frame(width: 900).background(bg), dir)
+            // Parameter trees are only populated once a unit is attached to an engine (as in a real chain).
+            let editorEngine = AVAudioEngine()
+            let reverb = AVAudioUnitEffect(audioComponentDescription: AudioComponentDescription(
+                componentType: kAudioUnitType_Effect, componentSubType: kAudioUnitSubType_Reverb2,
+                componentManufacturer: kAudioUnitManufacturer_Apple, componentFlags: 0, componentFlagsMask: 0))
+            editorEngine.attach(reverb)
+            save("effect-editor", GenericParameterView(unit: reverb.auAudioUnit).frame(width: 420, height: 520), dir)
             save("settings", SettingsPage(model: model).frame(width: 760).background(bg), dir)
             save("onboarding", OnboardingView(model: model, spectrum: spectrum).background(bg), dir)
             save("main-window", MainWindow(model: model, spectrum: spectrum, meters: meters), dir, size: CGSize(width: 1100, height: 900))

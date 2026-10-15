@@ -54,4 +54,14 @@ final class PresetTests: XCTestCase {
         XCTAssertEqual(imported.effects[0].state, Data([9]))
         XCTAssertNotEqual(imported.effects[0].id, p.effects[0].id)
     }
+
+    func testImportDropsThirdPartyPluginStateButKeepsBuiltIns() throws {
+        let au = AudioUnitID(type: 1, subType: 2, manufacturer: 3, name: "Some Plugin", manufacturerName: "Vendor")
+        var p = Preset(name: "Shared", bands: [])
+        p.effects = [EffectSlot(kind: .audioUnit(au), state: Data([0xDE, 0xAD])),
+                     EffectSlot(kind: .builtIn(.delay), state: Data([7]))]
+        let imported = try Preset.importPresets(from: try Preset.exportData([p]))[0]
+        XCTAssertNil(imported.effects[0].state)
+        XCTAssertEqual(imported.effects[1].state, Data([7]))
+    }
 }
