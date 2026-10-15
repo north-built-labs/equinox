@@ -1,36 +1,45 @@
 import EquinoxAudio
-import EquinoxDSP
+import EquinoxCore
 import SwiftUI
 
 @MainActor
-final class DebugModel: ObservableObject {
-    let audio = AudioController()
-    @Published var status: AudioStatus = .stopped
-    @Published var bassTest = false { didSet { push() } }
+final class AppEnvironment {
+    static let shared = AppEnvironment()
+    let model: AppModel
+    let spectrum: SpectrumModel
 
-    init() {
-        audio.onStatusChange = { [weak self] in self?.status = $0 }
-        audio.start()
-        push()
+    private init() {
+        let model = AppModel(audio: AudioController())
+        self.model = model
+        spectrum = SpectrumModel(tap: model.analysis, sampleRate: { [weak model] in model?.sampleRate ?? 48_000 })
+        model.launch()
     }
+}
 
-    func push() {
-        var s = DSPSettings()
-        s.bands = bassTest ? [EQBand(type: .lowShelf, frequency: 150, gainDB: 12, q: 0.7)] : []
-        s.preampDB = bassTest ? -6 : 0
-        audio.apply(s)
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationWillTerminate(_ notification: Notification) {
+        MainActor.assumeIsolated { AppEnvironment.shared.model.flushSave() }
     }
 }
 
 @main
 struct EquinoxApp: App {
-    @StateObject private var model = DebugModel()
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
+    private let env = AppEnvironment.shared
 
     var body: some Scene {
-        MenuBarExtra("Equinox", systemImage: "waveform.circle") {
-            Text(String(describing: model.status))
-            Toggle("Bass test (+12 dB low shelf)", isOn: $model.bassTest)
-            Button("Quit") { NSApp.terminate(nil) }
+        MenuBarExtra {
+            MenuBarPanel(model: env.model, spectrum: env.spectrum)
+        } label: {
+            Image(systemName: env.model.isEnabled ? "waveform.circle.fill" : "waveform.circle")
         }
+        .menuBarExtraStyle(.window)
+
+        Window("Equinox", id: "main") {
+            MainWindow(model: env.model, spectrum: env.spectrum)
+        }
+        .defaultLaunchBehavior(env.model.hasCompletedOnboarding ? .suppressed : .presented)
+        .windowStyle(.hiddenTitleBar)
+        .defaultSize(width: 980, height: 720)
     }
 }
