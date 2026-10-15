@@ -14,6 +14,8 @@ public struct DSPSettings: Codable, Equatable, Sendable {
     /// -1...1
     public var balance = 0.0
     public var isMuted = false
+    /// Per-app strips (Phase 2). Mapped to the session's tap order by key.
+    public var strips: [StripSettings] = []
 
     public init() {}
 }
@@ -25,8 +27,9 @@ public final class DSPConfig: @unchecked Sendable {
     public let eqCoefficients: [Double]
     public let leftGain: Float
     public let rightGain: Float
+    public let strips: [StripConfig]
 
-    public init(settings s: DSPSettings, sampleRate: Double) {
+    public init(settings s: DSPSettings, sampleRate: Double, stripOrder: [String] = [StripSettings.othersKey]) {
         self.sampleRate = sampleRate
         isBypassed = s.isBypassed
         // Bypass turns the EQ and preamp off (ramped to identity, so no click);
@@ -41,5 +44,42 @@ public final class DSPConfig: @unchecked Sendable {
         let common = s.isMuted ? 0 : volume * boost * preamp
         leftGain = Float(common * bal.left)
         rightGain = Float(common * bal.right)
+        strips = stripOrder.map { key in
+            s.strips.first { $0.key == key }.map { StripConfig(settings: $0, sampleRate: sampleRate) } ?? .unity
+        }
+    }
+}
+
+public struct StripSettings: Codable, Equatable, Sendable {
+    public static let othersKey = ""
+    public static let maxVolume = 1.5
+
+    public var key: String
+    public var volume: Double
+    public var isMuted: Bool
+    public var preampDB: Double
+    /// Empty = no per-app EQ.
+    public var bands: [EQBand]
+
+    public init(key: String, volume: Double = 1, isMuted: Bool = false, preampDB: Double = 0, bands: [EQBand] = []) {
+        self.key = key; self.volume = volume; self.isMuted = isMuted; self.preampDB = preampDB; self.bands = bands
+    }
+}
+
+public struct StripConfig: Sendable {
+    public static let unity = StripConfig(gain: 1, eqCoefficients: nil)
+    public let gain: Float
+    /// nil = no per-app EQ (strip EQ is skipped).
+    public let eqCoefficients: [Double]?
+
+    public init(gain: Float, eqCoefficients: [Double]?) { self.gain = gain; self.eqCoefficients = eqCoefficients }
+
+    init(settings s: StripSettings, sampleRate: Double) {
+        let volume = min(max(s.volume.isFinite ? s.volume : 1, 0), StripSettings.maxVolume)
+        let preamp = s.bands.isEmpty ? 1 : Decibels.toLinear(min(max(s.preampDB.isFinite ? s.preampDB : 0, -24), 24))
+        gain = s.isMuted ? 0 : Float(volume * preamp)
+        let sections = s.bands.lazy.filter(\.isEnabled).prefix(BiquadBank.maxSections)
+            .map { BiquadCoefficients(band: $0, sampleRate: sampleRate) }
+        eqCoefficients = s.bands.isEmpty ? nil : BiquadBank.flatten(Array(sections))
     }
 }

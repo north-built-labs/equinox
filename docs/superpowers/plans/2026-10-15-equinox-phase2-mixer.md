@@ -331,10 +331,10 @@ public final class StripMeters: @unchecked Sendable {
         vDSP_maxmgv(right, 1, &pr, vDSP_Length(frames))
         let peak = max(pl, pr)
         guard peak.isFinite else { return }
-        let atomic = slots[strip].bits
-        var current = atomic.load(ordering: .relaxed)
+        let slot = slots[strip]
+        var current = slot.bits.load(ordering: .relaxed)
         while peak.bitPattern > current {
-            let (done, original) = atomic.compareExchange(expected: current, desired: peak.bitPattern, ordering: .relaxed)
+            let (done, original) = slot.bits.compareExchange(expected: current, desired: peak.bitPattern, ordering: .relaxed)
             if done { break }
             current = original
         }
