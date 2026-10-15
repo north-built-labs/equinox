@@ -39,7 +39,7 @@ final class SelfTest {
             check("engine starts", true, "\(name) @ \(Int(rate)) Hz")
         }
 
-        do { try startTone(seconds: 14) } catch {
+        do { try startTone(seconds: 26) } catch {
             check("test tone plays", false, "\(error)")
             finish()
         }
@@ -86,6 +86,8 @@ final class SelfTest {
         check("limiter holds −0.3 dBFS ceiling", max(peaks.left, peaks.right) <= ceiling,
               "peak \(fmt(Decibels.fromLinear(Double(max(peaks.left, peaks.right))))) dBFS")
 
+        await perAppChecks(flat: flat)
+
         audio.apply(DSPSettings())
         audio.restart()
         let recovered = await waitForRunning()
@@ -103,6 +105,41 @@ final class SelfTest {
         check("no feedback after playback stops", residual < -80, "1 kHz residual \(fmt(residual)) dBFS")
 
         finish()
+    }
+
+    /// Gives afplay (the tone) its own strip and checks per-app volume, mute, EQ and isolation from Other Apps.
+    private func perAppChecks(flat: Double) async {
+        let tone = AudioSystem.audioProcesses().filter { $0.executableName == "afplay" }.map(\.objectID)
+        guard !tone.isEmpty else { check("per-app: tone process found", false, "afplay not in HAL process list"); return }
+        let key = "exe:afplay"
+        audio.setDedicatedStrips([DedicatedStrip(key: key, processes: tone)])
+        await sleep(0.6)   // debounced rebuild
+        let rebuilt = await waitForRunning()
+        await sleep(0.8)
+        check("per-app: dedicated tap session", rebuilt && audio.activeStripKeys == ["", key],
+              "strips \(audio.activeStripKeys)")
+
+        var s = DSPSettings()
+        s.strips = [StripSettings(key: key, volume: 0.5)]
+        let half = await measure(s)
+        check("per-app: app volume 50% = −6 dB", abs(half - flat + 6.02) < 0.5, "Δ \(fmt(half - flat)) dB")
+
+        s.strips = [StripSettings(key: key, volume: 1), StripSettings(key: StripSettings.othersKey, volume: 0)]
+        let isolated = await measure(s)
+        check("per-app: Other Apps fader doesn't touch a dedicated app", abs(isolated - flat) < 0.5, "Δ \(fmt(isolated - flat)) dB")
+
+        s.strips = [StripSettings(key: key, isMuted: true)]
+        let muted = await measure(s)
+        check("per-app: app mute", muted < -90, "\(fmt(muted)) dBFS")
+
+        s.strips = [StripSettings(key: key, bands: [EQBand(type: .peak, frequency: 1000, gainDB: 12, q: 1)])]
+        let eq = await measure(s)
+        check("per-app: app EQ +12 dB at 1 kHz", abs(eq - flat - 12) < 1, "Δ \(fmt(eq - flat)) dB")
+
+        audio.setDedicatedStrips([])
+        await sleep(0.6)
+        _ = await waitForRunning()
+        await sleep(0.8)
     }
 
     // MARK: Measurement

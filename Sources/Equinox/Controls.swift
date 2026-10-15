@@ -95,12 +95,13 @@ struct VerticalSlider: View {
     @Binding var value: Double
     var range: ClosedRange<Double>
     var tint: Color
+    var zero: Double = 0
 
     var body: some View {
         GeometryReader { geo in
             let h = geo.size.height
             let t = CGFloat((value - range.lowerBound) / (range.upperBound - range.lowerBound))
-            let zeroT = CGFloat((0 - range.lowerBound) / (range.upperBound - range.lowerBound))
+            let zeroT = CGFloat((zero - range.lowerBound) / (range.upperBound - range.lowerBound))
             let y = h * (1 - t), zeroY = h * (1 - zeroT)
             ZStack(alignment: .top) {
                 Capsule().fill(.white.opacity(0.08)).frame(width: 6)
@@ -113,7 +114,7 @@ struct VerticalSlider: View {
                 let tt = 1 - Double(min(max(v.location.y / h, 0), 1))
                 value = ((range.lowerBound + tt * (range.upperBound - range.lowerBound)) * 2).rounded() / 2
             })
-            .onTapGesture(count: 2) { value = 0 }
+            .onTapGesture(count: 2) { value = zero }
         }
     }
 }

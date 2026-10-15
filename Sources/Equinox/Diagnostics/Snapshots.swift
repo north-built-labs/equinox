@@ -14,11 +14,17 @@ enum Snapshots {
 
             let storeDir = FileManager.default.temporaryDirectory.appendingPathComponent("equinox-snapshots-\(UUID().uuidString)")
             let audio = PreviewAudio()
-            let model = AppModel(audio: audio, store: Store(directory: storeDir), loginItem: PreviewLoginItem())
+            let model = AppModel(audio: audio, store: Store(directory: storeDir), loginItem: PreviewLoginItem(), runningApps: PreviewRunningApps())
             model.completeOnboarding()
             model.selectPreset(Preset.builtIns[4].id)   // Loudness
             let notch = model.addBand(frequency: 3200, gainDB: -5)
             model.boostDB = 4.5
+            model.setStripVolume(1.3, for: "com.apple.Music")
+            model.setStripPreset(Preset.builtIns[1].id, for: "com.apple.Music")
+            model.setStripVolume(0.45, for: "com.google.Chrome")
+            model.setStripMuted(true, for: "us.zoom.xos")
+            let meters = MixerMeters(model: model)
+            meters.freeze(["": 0.35, "com.apple.Music": 0.8, "com.google.Chrome": 0.3])
 
             let spectrum = SpectrumModel(tap: model.analysis, sampleRate: { 48_000 })
             spectrum.freeze(levels: spectrum.frequencies.map { f in
@@ -27,13 +33,14 @@ enum Snapshots {
             }, peakLeft: 0.55, peakRight: 0.48)
 
             let bg = Theme.background
-            save("menubar", MenuBarPanel(model: model, spectrum: spectrum).background(bg), dir)
+            save("menubar", MenuBarPanel(model: model, spectrum: spectrum, meters: meters).background(bg), dir)
             save("equalizer", EqualizerPage(model: model, spectrum: spectrum, selectedBandID: notch)
                 .frame(width: 900).background(bg), dir)
             save("graphic", GraphicEQView(model: model).padding(18).frame(width: 760).glassCard().padding(24).background(bg), dir)
+            save("mixer", MixerPage(model: model, meters: meters).frame(width: 900).background(bg), dir)
             save("settings", SettingsPage(model: model).frame(width: 760).background(bg), dir)
             save("onboarding", OnboardingView(model: model, spectrum: spectrum).background(bg), dir)
-            save("main-window", MainWindow(model: model, spectrum: spectrum), dir, size: CGSize(width: 1100, height: 900))
+            save("main-window", MainWindow(model: model, spectrum: spectrum, meters: meters), dir, size: CGSize(width: 1100, height: 900))
             try? FileManager.default.removeItem(at: storeDir)
         }
         exit(0)
@@ -68,8 +75,13 @@ final class PreviewAudio: AudioControlling {
     let analysis = AnalysisTap()
     var onProcessesChange: (([AudioProcessInfo]) -> Void)?
     let stripMeters = StripMeters()
-    var activeStripKeys: [String] = [""]
-    var processes: [AudioProcessInfo] = []
+    var processes: [AudioProcessInfo] = [
+        AudioProcessInfo(objectID: 31, pid: 31, bundleID: "com.apple.Music", executableName: "Music", isRunningOutput: true),
+        AudioProcessInfo(objectID: 32, pid: 32, bundleID: "com.google.Chrome.helper", executableName: "Helper", isRunningOutput: true),
+        AudioProcessInfo(objectID: 33, pid: 33, bundleID: "us.zoom.xos", executableName: "zoom.us", isRunningOutput: false),
+        AudioProcessInfo(objectID: 34, pid: 34, bundleID: "", executableName: "afplay", isRunningOutput: true),
+    ]
+    var activeStripKeys: [String] = ["", "com.apple.Music", "com.google.Chrome"]
     var dedicated: [DedicatedStrip] = []
     func audioProcesses() -> [AudioProcessInfo] { processes }
     func setDedicatedStrips(_ strips: [DedicatedStrip]) { dedicated = strips }
@@ -92,4 +104,12 @@ final class PreviewAudio: AudioControlling {
 final class PreviewLoginItem: LoginItemControlling {
     var isEnabled = false
     func setEnabled(_ enabled: Bool) throws { isEnabled = enabled }
+}
+
+final class PreviewRunningApps: RunningAppsProviding {
+    func runningApps() -> [RunningAppInfo] {
+        [RunningAppInfo(bundleID: "com.apple.Music", name: "Music"),
+         RunningAppInfo(bundleID: "com.google.Chrome", name: "Google Chrome"),
+         RunningAppInfo(bundleID: "us.zoom.xos", name: "zoom.us")]
+    }
 }

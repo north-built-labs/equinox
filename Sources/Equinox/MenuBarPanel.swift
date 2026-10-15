@@ -22,6 +22,7 @@ struct StatusDot: View {
 struct MenuBarPanel: View {
     @Bindable var model: AppModel
     var spectrum: SpectrumModel
+    var meters: MixerMeters
     @Environment(\.openWindow) private var openWindow
     @State private var selected: UUID?
 
@@ -57,6 +58,9 @@ struct MenuBarPanel: View {
                 MeterView(spectrum: spectrum)
             }
             .glassCard(cornerRadius: 14, padding: 12)
+
+            CompactMixer(model: model, meters: meters)
+                .glassCard(cornerRadius: 14, padding: 12)
 
             HStack {
                 Button {

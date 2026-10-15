@@ -7,11 +7,13 @@ final class AppEnvironment {
     static let shared = AppEnvironment()
     let model: AppModel
     let spectrum: SpectrumModel
+    let meters: MixerMeters
 
     private init() {
         let model = AppModel(audio: AudioController())
         self.model = model
         spectrum = SpectrumModel(tap: model.analysis, sampleRate: { [weak model] in model?.sampleRate ?? 48_000 })
+        meters = MixerMeters(model: model)
         model.launch()
     }
 }
@@ -28,14 +30,14 @@ struct EquinoxApp: App {
 
     var body: some Scene {
         MenuBarExtra {
-            MenuBarPanel(model: env.model, spectrum: env.spectrum)
+            MenuBarPanel(model: env.model, spectrum: env.spectrum, meters: env.meters)
         } label: {
             Image(systemName: env.model.isEnabled ? "waveform.circle.fill" : "waveform.circle")
         }
         .menuBarExtraStyle(.window)
 
         Window("Equinox", id: "main") {
-            MainWindow(model: env.model, spectrum: env.spectrum)
+            MainWindow(model: env.model, spectrum: env.spectrum, meters: env.meters)
         }
         .defaultLaunchBehavior(env.model.hasCompletedOnboarding ? .suppressed : .presented)
         .windowStyle(.hiddenTitleBar)
