@@ -230,7 +230,9 @@ public final class AppModel {
     private func updateMix(_ key: String, _ change: (inout AppMixSettings) -> Void) {
         var s = appMix[key] ?? AppMixSettings()
         change(&s)
-        appMix[key] = s.isDefault ? nil : s
+        // Keep the entry (and the app's channel) even when values return to default, e.g. a fader dragged
+        // through 100%; only Reset removes it. Avoids a session rebuild mid-drag.
+        appMix[key] = s
         mixerChanged()
     }
 
@@ -244,10 +246,12 @@ public final class AppModel {
 
     /// Recomputes strips and dedicated taps, then pushes audio settings.
     private func mixerChanged() {
+        // Channel priority when over the cap: the soloed app, then apps that are playing, then by key.
         let dedicatedGroups = appGroups
             .filter { appMix[$0.key] != nil || soloKey == $0.key }
-            .sorted { $0.key < $1.key }
+            .sorted { (rank($0), $0.key) < (rank($1), $1.key) }
             .prefix(MixBus.maxStrips - 1)
+            .sorted { $0.key < $1.key }
         dedicatedKeys = dedicatedGroups.map(\.key)
         audio.setDedicatedStrips(dedicatedGroups.map { DedicatedStrip(key: $0.key, processes: $0.processObjects) })
 
@@ -266,6 +270,8 @@ public final class AppModel {
         mixerStrips = strips
         push()
     }
+
+    private func rank(_ g: AudioAppGroup) -> Int { g.key == soloKey ? 0 : (g.isPlaying ? 1 : 2) }
 
     private func stripSettings() -> [StripSettings] {
         ([StripSettings.othersKey] + dedicatedKeys).map { key in

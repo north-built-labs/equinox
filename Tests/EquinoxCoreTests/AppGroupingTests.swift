@@ -41,4 +41,13 @@ final class AppGroupingTests: XCTestCase {
                                        runningApps: apps, excludingBundleIDs: ["com.pie.equinox"], excludingPIDs: [5004])
         XCTAssertEqual(groups.map(\.name), ["Google Chrome", "Spotify"])
     }
+
+    func testResponsibleAppOwnsOutOfTreeHelper() {
+        let safari = RunningAppInfo(bundleID: "com.apple.Safari", name: "Safari", pid: 500)
+        let gpu = AudioProcessInfo(objectID: 7, pid: 900, bundleID: "com.apple.WebKit.GPU", executableName: "GPU",
+                                   isRunningOutput: true, responsiblePID: 500)
+        let groups = AppGrouping.group([gpu], runningApps: apps + [safari], excludingBundleIDs: [], excludingPIDs: [])
+        XCTAssertEqual(groups.map(\.key), ["com.apple.Safari"])
+        XCTAssertEqual(groups[0].name, "Safari")
+    }
 }

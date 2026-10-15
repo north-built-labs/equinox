@@ -87,16 +87,23 @@ public enum AudioSystem {
     }
 }
 
+@_silgen_name("responsibility_get_pid_responsible_for_pid")
+private func equinox_responsibility_get_pid_responsible_for_pid(_ pid: pid_t) -> pid_t
+
 public struct AudioProcessInfo: Hashable, Sendable {
     public let objectID: AudioObjectID
     public let pid: pid_t
     public let bundleID: String
     public let executableName: String
     public let isRunningOutput: Bool
+    /// The process macOS holds responsible for this one (e.g. Safari for its WebKit GPU process).
+    public let responsiblePID: pid_t
 
-    public init(objectID: AudioObjectID, pid: pid_t, bundleID: String, executableName: String, isRunningOutput: Bool) {
+    public init(objectID: AudioObjectID, pid: pid_t, bundleID: String, executableName: String, isRunningOutput: Bool,
+                responsiblePID: pid_t? = nil) {
         self.objectID = objectID; self.pid = pid; self.bundleID = bundleID
         self.executableName = executableName; self.isRunningOutput = isRunningOutput
+        self.responsiblePID = responsiblePID ?? pid
     }
 }
 
@@ -109,8 +116,15 @@ extension AudioSystem {
             let bundleID = (try? id.getString(kAudioProcessPropertyBundleID)) ?? ""
             let running = ((try? id.get(kAudioProcessPropertyIsRunningOutput, initial: UInt32(0))) ?? 0) != 0
             return AudioProcessInfo(objectID: id, pid: pid, bundleID: bundleID,
-                                    executableName: executableName(pid), isRunningOutput: running)
+                                    executableName: executableName(pid), isRunningOutput: running,
+                                    responsiblePID: responsiblePID(for: pid))
         }
+    }
+
+    /// Private libsystem SPI used by TCC for attribution; returns -1 when unknown.
+    static func responsiblePID(for pid: pid_t) -> pid_t {
+        let r = equinox_responsibility_get_pid_responsible_for_pid(pid)
+        return r > 0 ? r : pid
     }
 
     static func executableName(_ pid: pid_t) -> String {

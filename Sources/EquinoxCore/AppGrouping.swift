@@ -5,7 +5,8 @@ import EquinoxAudio
 public struct RunningAppInfo: Equatable, Sendable {
     public let bundleID: String
     public let name: String
-    public init(bundleID: String, name: String) { self.bundleID = bundleID; self.name = name }
+    public let pid: pid_t?
+    public init(bundleID: String, name: String, pid: pid_t? = nil) { self.bundleID = bundleID; self.name = name; self.pid = pid }
 }
 
 public protocol RunningAppsProviding: AnyObject {
@@ -17,7 +18,7 @@ public final class WorkspaceRunningApps: RunningAppsProviding {
     public func runningApps() -> [RunningAppInfo] {
         NSWorkspace.shared.runningApplications.compactMap { app in
             guard let id = app.bundleIdentifier else { return nil }
-            return RunningAppInfo(bundleID: id, name: app.localizedName ?? id)
+            return RunningAppInfo(bundleID: id, name: app.localizedName ?? id, pid: app.processIdentifier)
         }
     }
 }
@@ -32,14 +33,16 @@ public struct AudioAppGroup: Equatable, Sendable {
 }
 
 public enum AppGrouping {
-    /// Groups audio processes into apps. Helpers whose bundle ID extends a running app's bundle ID
-    /// (at a dot boundary) belong to that app; processes without a bundle ID are keyed by executable.
+    /// Groups audio processes into apps. A process belongs to the running app macOS holds responsible
+    /// for it (Safari for its WebKit GPU process); failing that, to a running app whose bundle ID it
+    /// extends at a dot boundary (Chrome's helpers); processes without a bundle ID are keyed by executable.
     public static func group(_ processes: [AudioProcessInfo], runningApps: [RunningAppInfo],
                              excludingBundleIDs: Set<String>, excludingPIDs: Set<pid_t>) -> [AudioAppGroup] {
         var order: [String] = []
         var members: [String: (name: String, bundleID: String?, objects: [AudioObjectID], playing: Bool)] = [:]
         for p in processes where !excludingPIDs.contains(p.pid) {
-            let owner = owningApp(p.bundleID, runningApps)
+            let owner = runningApps.first { $0.pid != nil && $0.pid == p.responsiblePID && p.responsiblePID != p.pid }
+                ?? owningApp(p.bundleID, runningApps)
             let key: String, name: String, bundleID: String?
             if let owner {
                 key = owner.bundleID; name = owner.name; bundleID = owner.bundleID

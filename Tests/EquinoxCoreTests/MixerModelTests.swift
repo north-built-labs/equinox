@@ -123,4 +123,37 @@ final class MixerModelTests: XCTestCase {
         for i in 0..<20 { m.setStripMuted(true, for: "exe:tool\(i)") }
         XCTAssertEqual(audio.dedicated.count, MixBus.maxStrips - 1)
     }
+
+    func testSoloBeyondCapIsDedicated() {
+        let m = makeModel()
+        let many = (0..<20).map { AudioProcessInfo(objectID: AudioObjectID(100 + $0), pid: pid_t(100 + $0), bundleID: "",
+                                                   executableName: "tool\($0)", isRunningOutput: false) }
+        audio.onProcessesChange?(many)
+        for i in 0..<20 { m.setStripMuted(true, for: "exe:tool\(i)") }
+        m.toggleSolo("exe:tool9")
+        XCTAssertTrue(audio.dedicated.contains { $0.key == "exe:tool9" })
+        XCTAssertEqual(audio.dedicated.count, MixBus.maxStrips - 1)
+    }
+
+    func testPlayingAppsWinChannelsOverIdleOnes() {
+        let m = makeModel()
+        var many: [AudioProcessInfo] = []
+        for i in 0..<20 {
+            let id = AudioObjectID(100 + i)
+            many.append(AudioProcessInfo(objectID: id, pid: pid_t(100 + i), bundleID: "",
+                                         executableName: "tool\(i)", isRunningOutput: i == 9))
+        }
+        audio.onProcessesChange?(many)
+        for i in 0..<20 { m.setStripMuted(true, for: "exe:tool\(i)") }
+        XCTAssertTrue(audio.dedicated.contains { $0.key == "exe:tool9" })
+    }
+
+    func testDraggingThroughDefaultKeepsStrip() {
+        let m = makeModel()
+        m.setStripVolume(0.5, for: "com.google.Chrome")
+        m.setStripVolume(1.0, for: "com.google.Chrome")
+        XCTAssertEqual(audio.dedicated.map(\.key), ["com.google.Chrome"])
+        m.resetStrip("com.google.Chrome")
+        XCTAssertTrue(audio.dedicated.isEmpty)
+    }
 }
