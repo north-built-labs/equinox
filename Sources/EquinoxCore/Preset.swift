@@ -9,9 +9,24 @@ public struct Preset: Codable, Hashable, Identifiable, Sendable {
     public var preampDB: Double
     public var bands: [EQBand]
     public var isBuiltIn: Bool
+    public var effects: [EffectSlot]
 
-    public init(id: UUID = UUID(), name: String, preampDB: Double = 0, bands: [EQBand], isBuiltIn: Bool = false) {
+    public init(id: UUID = UUID(), name: String, preampDB: Double = 0, bands: [EQBand], isBuiltIn: Bool = false,
+                effects: [EffectSlot] = []) {
         self.id = id; self.name = name; self.preampDB = preampDB; self.bands = bands; self.isBuiltIn = isBuiltIn
+        self.effects = effects
+    }
+
+    enum CodingKeys: String, CodingKey { case id, name, preampDB, bands, isBuiltIn, effects }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        preampDB = try c.decode(Double.self, forKey: .preampDB)
+        bands = try c.decode([EQBand].self, forKey: .bands)
+        isBuiltIn = try c.decodeIfPresent(Bool.self, forKey: .isBuiltIn) ?? false
+        effects = (try? c.decodeIfPresent([EffectSlot].self, forKey: .effects)) ?? []
     }
 
     public static let graphicFrequencies: [Double] = [32, 64, 125, 250, 500, 1000, 2000, 4000, 8000, 16000]
@@ -50,7 +65,8 @@ public struct Preset: Codable, Hashable, Identifiable, Sendable {
             Preset(name: p.name.isEmpty ? "Imported" : p.name,
                    preampDB: min(max(p.preampDB.isFinite ? p.preampDB : 0, -24), 24),
                    bands: p.bands.prefix(BiquadBank.maxSections).map { var b = $0.clamped(); b.id = UUID(); return b },
-                   isBuiltIn: false)
+                   isBuiltIn: false,
+                   effects: p.effects.map { var s = $0; s.id = UUID(); return s })
         }
     }
 

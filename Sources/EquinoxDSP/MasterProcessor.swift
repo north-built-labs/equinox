@@ -25,32 +25,51 @@ public final class MasterProcessor {
         hasConfig = true
     }
 
-    /// Realtime-safe, in place, any frame count.
+    /// Realtime-safe, in place, any frame count. Equivalent to `processPre` then `processPost`.
     public func process(left: UnsafeMutablePointer<Float>, right: UnsafeMutablePointer<Float>, frames: Int) {
+        processPre(left: left, right: right, frames: frames)
+        processPost(left: left, right: right, frames: frames)
+    }
+
+    /// EQ stage (before the effects chain). Realtime-safe, in place, any frame count.
+    public func processPre(left: UnsafeMutablePointer<Float>, right: UnsafeMutablePointer<Float>, frames: Int) {
+        forEachChunk(frames) { o, n in
+            eq.process(left: left + o, right: right + o, frames: n)
+            if !Self.isFinite(left + o, right + o, n) {
+                eq.reset()
+                (left + o).update(repeating: 0, count: n); (right + o).update(repeating: 0, count: n)
+            }
+        }
+    }
+
+    /// Output stage (after the effects chain): gain ramp, then limiter. Realtime-safe, in place, any frame count.
+    public func processPost(left: UnsafeMutablePointer<Float>, right: UnsafeMutablePointer<Float>, frames: Int) {
+        forEachChunk(frames) { o, n in
+            if !Self.isFinite(left + o, right + o, n) {
+                limiter.reset()
+                (left + o).update(repeating: 0, count: n); (right + o).update(repeating: 0, count: n)
+            }
+            ramp(left + o, &currentLeft, targetLeft, n)
+            ramp(right + o, &currentRight, targetRight, n)
+            limiter.process(left: left + o, right: right + o, frames: n)
+        }
+    }
+
+    @inline(__always)
+    private func forEachChunk(_ frames: Int, _ body: (Int, Int) -> Void) {
         var offset = 0
         while offset < frames {
             let n = min(maxFrames, frames - offset)
-            processChunk(left + offset, right + offset, n)
+            body(offset, n)
             offset += n
         }
     }
 
-    private func processChunk(_ l: UnsafeMutablePointer<Float>, _ r: UnsafeMutablePointer<Float>, _ n: Int) {
-        eq.process(left: l, right: r, frames: n)
-
-        var energy: Float = 0
-        vDSP_svesq(l, 1, &energy, vDSP_Length(n))
-        var energyR: Float = 0
-        vDSP_svesq(r, 1, &energyR, vDSP_Length(n))
-        if !(energy + energyR).isFinite {
-            eq.reset(); limiter.reset()
-            l.update(repeating: 0, count: n); r.update(repeating: 0, count: n)
-            return
-        }
-
-        ramp(l, &currentLeft, targetLeft, n)
-        ramp(r, &currentRight, targetRight, n)
-        limiter.process(left: l, right: r, frames: n)
+    private static func isFinite(_ l: UnsafeMutablePointer<Float>, _ r: UnsafeMutablePointer<Float>, _ n: Int) -> Bool {
+        var el: Float = 0, er: Float = 0
+        vDSP_svesq(l, 1, &el, vDSP_Length(n))
+        vDSP_svesq(r, 1, &er, vDSP_Length(n))
+        return (el + er).isFinite
     }
 
     private func ramp(_ x: UnsafeMutablePointer<Float>, _ current: inout Float, _ target: Float, _ n: Int) {

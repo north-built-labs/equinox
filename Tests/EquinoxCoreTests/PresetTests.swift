@@ -39,4 +39,19 @@ final class PresetTests: XCTestCase {
         XCTAssertThrowsError(try Preset.importPresets(from: Data("nope".utf8)))
         XCTAssertThrowsError(try Preset.importPresets(from: Data("[]".utf8)))
     }
+    func testPresetWithoutEffectsDecodes() throws {
+        let json = #"{"id":"00000000-0000-0000-0000-0000000000AA","name":"Old","preampDB":0,"bands":[],"isBuiltIn":false}"#
+        let p = try JSONDecoder().decode(Preset.self, from: Data(json.utf8))
+        XCTAssertEqual(p.effects, [])
+        XCTAssertEqual(p.name, "Old")
+    }
+
+    func testImportKeepsEffectsWithFreshSlotIDs() throws {
+        var p = Preset(name: "FX", bands: [])
+        p.effects = [EffectSlot(kind: .builtIn(.reverb), state: Data([9]))]
+        let imported = try Preset.importPresets(from: try Preset.exportData([p]))[0]
+        XCTAssertEqual(imported.effects.count, 1)
+        XCTAssertEqual(imported.effects[0].state, Data([9]))
+        XCTAssertNotEqual(imported.effects[0].id, p.effects[0].id)
+    }
 }
