@@ -29,12 +29,14 @@ public final class DSPConfig: @unchecked Sendable {
     public init(settings s: DSPSettings, sampleRate: Double) {
         self.sampleRate = sampleRate
         isBypassed = s.isBypassed
-        let sections = s.bands.lazy.filter(\.isEnabled).prefix(BiquadBank.maxSections)
+        // Bypass turns the EQ and preamp off (ramped to identity, so no click);
+        // output controls, the limiter and the non-finite guard stay active.
+        let sections = s.isBypassed ? [] : s.bands.lazy.filter(\.isEnabled).prefix(BiquadBank.maxSections)
             .map { BiquadCoefficients(band: $0, sampleRate: sampleRate) }
         eqCoefficients = BiquadBank.flatten(Array(sections))
         let volume = min(max(s.softwareVolume.isFinite ? s.softwareVolume : 1, 0), 1)
         let boost = Decibels.toLinear(min(max(s.boostDB.isFinite ? s.boostDB : 0, 0), DSPSettings.maxBoostDB))
-        let preamp = Decibels.toLinear(min(max(s.preampDB.isFinite ? s.preampDB : 0, -24), 24))
+        let preamp = s.isBypassed ? 1 : Decibels.toLinear(min(max(s.preampDB.isFinite ? s.preampDB : 0, -24), 24))
         let bal = Balance.gains(s.balance)
         let common = s.isMuted ? 0 : volume * boost * preamp
         leftGain = Float(common * bal.left)

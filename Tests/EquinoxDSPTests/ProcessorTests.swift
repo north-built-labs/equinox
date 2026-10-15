@@ -55,14 +55,39 @@ final class ProcessorTests: XCTestCase {
         XCTAssertEqual(cfg.eqCoefficients.count, BiquadBank.maxSections * 2 * 5)
     }
 
-    func testBypassLeavesAudioUntouched() {
+    /// Bypass turns the EQ (and preamp) off; output controls, the limiter and the NaN guard stay active.
+    func testBypassSkipsEQButKeepsOutputControls() {
         let p = MasterProcessor(maxFrames: 512, sampleRate: fs)
-        var s = DSPSettings(); s.isBypassed = true; s.boostDB = 12
+        var s = DSPSettings(); s.isBypassed = true; s.preampDB = -6
+        s.bands = [EQBand(type: .peak, frequency: 300, gainDB: 12, q: 1)]
         p.apply(DSPConfig(settings: s, sampleRate: fs))
         let x = Signal.sine(300, fs: fs, count: 1000)
         var l = x, r = x
         process(p, &l, &r)
-        XCTAssertEqual(l, x)
+        for i in 0..<1000 { XCTAssertEqual(l[i], x[i], accuracy: 1e-5) }
+    }
+
+    func testBypassStillAppliesMuteAndSoftwareVolume() {
+        let p = MasterProcessor(maxFrames: 512, sampleRate: fs)
+        var s = DSPSettings(); s.isBypassed = true; s.softwareVolume = 0.5
+        p.apply(DSPConfig(settings: s, sampleRate: fs))
+        var l = [Float](repeating: 0.4, count: 600), r = l
+        process(p, &l, &r)
+        XCTAssertEqual(l[599], 0.2, accuracy: 1e-4)
+        s.isMuted = true
+        p.apply(DSPConfig(settings: s, sampleRate: fs))
+        var l2 = [Float](repeating: 0.4, count: 600), r2 = l2
+        process(p, &l2, &r2)
+        XCTAssertEqual(l2[599], 0, accuracy: 1e-6)
+    }
+
+    func testBypassStillSilencesNaN() {
+        let p = MasterProcessor(maxFrames: 512, sampleRate: fs)
+        var s = DSPSettings(); s.isBypassed = true
+        p.apply(DSPConfig(settings: s, sampleRate: fs))
+        var l = [Float](repeating: .nan, count: 256), r = l
+        process(p, &l, &r)
+        XCTAssertTrue(l.allSatisfy { $0 == 0 })
     }
 
     func testProcessesMoreFramesThanCapacityByChunking() {

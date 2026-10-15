@@ -7,7 +7,6 @@ public final class MasterProcessor {
     public let limiter: PeakLimiter
     private let eq: BiquadBank
     private var hasConfig = false
-    private var isBypassed = false
     private var currentLeft: Float = 1, currentRight: Float = 1
     private var targetLeft: Float = 1, targetRight: Float = 1
 
@@ -20,7 +19,6 @@ public final class MasterProcessor {
     /// Realtime-safe. The first config is applied immediately, later ones are ramped.
     public func apply(_ config: DSPConfig) {
         eq.setCoefficients(config.eqCoefficients, ramp: hasConfig)
-        isBypassed = config.isBypassed
         targetLeft = config.leftGain; targetRight = config.rightGain
         if !hasConfig { currentLeft = targetLeft; currentRight = targetRight }
         limiter.setSampleRate(config.sampleRate)
@@ -29,7 +27,6 @@ public final class MasterProcessor {
 
     /// Realtime-safe, in place, any frame count.
     public func process(left: UnsafeMutablePointer<Float>, right: UnsafeMutablePointer<Float>, frames: Int) {
-        guard !isBypassed else { return }
         var offset = 0
         while offset < frames {
             let n = min(maxFrames, frames - offset)

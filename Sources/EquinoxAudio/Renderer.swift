@@ -5,22 +5,51 @@ import os
 import Synchronization
 
 /// Hands immutable configs from the main thread to the audio thread without blocking it.
+/// Configs are retired by acknowledgement: the main thread keeps every config the audio thread
+/// might still hold until the audio thread reports it has moved past it, so the audio thread's
+/// release is never the last one (no free() on the IO thread).
 final class ConfigMailbox: @unchecked Sendable {
-    private let pending = OSAllocatedUnfairLock<DSPConfig?>(initialState: nil)
-    /// Main-thread history keeps recently replaced configs alive so the audio thread never frees one.
-    private var history: [DSPConfig] = []
+    final class Entry: @unchecked Sendable {
+        let config: DSPConfig
+        let generation: Int
+        init(config: DSPConfig, generation: Int) { self.config = config; self.generation = generation }
+    }
 
+    /// Safety cap for when the audio thread is not running and never acknowledges.
+    private static let maxHistory = 512
+
+    private let pending = OSAllocatedUnfairLock<Entry?>(initialState: nil)
+    private let acknowledged = Atomic<Int>(0)
+    private var history: [Entry] = []
+    private var nextGeneration = 1
+
+    /// Main thread.
     func post(_ config: DSPConfig) {
-        history.append(config)
-        if history.count > 16 { history.removeFirst(history.count - 16) }
-        pending.withLock { $0 = config }
+        let entry = Entry(config: config, generation: nextGeneration)
+        nextGeneration += 1
+        let inUse = acknowledged.load(ordering: .acquiring)
+        history.removeAll { $0.generation < inUse }
+        if history.count >= Self.maxHistory { history.removeFirst(history.count - Self.maxHistory + 1) }
+        history.append(entry)
+        pending.withLock { $0 = entry }
+    }
+
+    /// Main thread, only while the IOProc is stopped: nothing on the audio thread holds an entry.
+    func reset() {
+        history.removeAll()
+        acknowledged.store(0, ordering: .releasing)
     }
 
     /// Realtime-safe: returns nil if nothing is pending or the lock is momentarily held.
-    func take() -> DSPConfig? {
-        pending.withLockIfAvailable { (state: inout DSPConfig?) -> DSPConfig? in
-            let c = state; state = nil; return c
+    func take() -> Entry? {
+        pending.withLockIfAvailable { (state: inout Entry?) -> Entry? in
+            let e = state; state = nil; return e
         } ?? nil
+    }
+
+    /// Realtime-safe. Call after the audio thread has replaced its previous entry with `entry`.
+    func acknowledge(_ entry: Entry) {
+        acknowledged.store(entry.generation, ordering: .releasing)
     }
 }
 
@@ -31,7 +60,7 @@ public final class Renderer: @unchecked Sendable {
     public let analysis = AnalysisTap()
     private let mailbox = ConfigMailbox()
     private var processor = MasterProcessor(maxFrames: Renderer.maxFrames, sampleRate: 48_000)
-    private var current: DSPConfig?
+    private var current: ConfigMailbox.Entry?
     private var inputStreamOffset = 0
     private let left = UnsafeMutablePointer<Float>.allocate(capacity: Renderer.maxFrames * 4)
     private let right = UnsafeMutablePointer<Float>.allocate(capacity: Renderer.maxFrames * 4)
@@ -51,6 +80,7 @@ public final class Renderer: @unchecked Sendable {
     func prepare(sampleRate: Double, inputStreamOffset: Int) {
         processor = MasterProcessor(maxFrames: Renderer.maxFrames, sampleRate: sampleRate)
         current = nil
+        mailbox.reset()
         self.inputStreamOffset = inputStreamOffset
     }
 
@@ -64,9 +94,10 @@ public final class Renderer: @unchecked Sendable {
         let frames = min(ChannelIO.frameCount(of: out), Renderer.maxFrames * 4)
         guard frames > 0 else { return }
 
-        if let config = mailbox.take() {
-            current = config   // previous config stays alive in the mailbox history
-            processor.apply(config)
+        if let entry = mailbox.take() {
+            current = entry                 // previous entry is still owned by the mailbox history
+            mailbox.acknowledge(entry)
+            processor.apply(entry.config)
         }
         ChannelIO.readStereo(from: inp, bufferIndex: inputStreamOffset, frames: frames, left: left, right: right)
         if current != nil { processor.process(left: left, right: right, frames: frames) }
