@@ -2,8 +2,10 @@
 # Checks a packaged release the way users' machines will see it, before it's published.
 #   scripts/verify-release.sh <Equinox-macos.zip> <version>
 # Always: the archive unpacks to a valid, universal, code-signed Equinox.app stamped with <version>.
-# When <zip>.sig exists (or REQUIRE_SIGNATURE=1): an older copy of that same app runs its real updater
-# (--update-dry-run) against the archive and must accept the signature, swap itself out and end up at <version>.
+# When <zip>.sig exists (or REQUIRE_SIGNATURE=1): an older app runs its real updater (--update-dry-run) against
+# the archive and must accept the signature, swap itself out and end up at <version>. The older app is the
+# currently published release when PREVIOUS_ZIP points at it (what users actually have installed), otherwise
+# a copy of this same build stamped 0.0.1.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -37,12 +39,17 @@ if [[ ! -f "$SIG" ]]; then
     exit 0
 fi
 
-# Install an "older" copy of the very same build, then let it update itself to the archive.
+# Install the older app, then let it update itself to the archive.
 INSTALLED="$TMP/apps/Equinox.app"
 mkdir -p "$TMP/apps"
-ditto "$APP" "$INSTALLED"
-/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString 0.0.1" "$INSTALLED/Contents/Info.plist"
-codesign --force --sign - --timestamp=none "$INSTALLED" >/dev/null 2>&1
+if [[ -n "${PREVIOUS_ZIP:-}" ]]; then
+    ditto -x -k "$PREVIOUS_ZIP" "$TMP/apps" || fail "previous release doesn't unpack"
+else
+    ditto "$APP" "$INSTALLED"
+    /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString 0.0.1" "$INSTALLED/Contents/Info.plist"
+    codesign --force --sign - --timestamp=none "$INSTALLED" >/dev/null 2>&1
+fi
+FROM="$(plist "$INSTALLED" CFBundleShortVersionString)"
 
 LOG="$TMP/dry-run.log"
 SIG_ABS="$(cd "$(dirname "$SIG")" && pwd)/$(basename "$SIG")"
@@ -57,4 +64,4 @@ for _ in $(seq 1 60); do
 done
 [[ "$(plist "$INSTALLED" CFBundleShortVersionString 2>/dev/null)" == "$VERSION" ]] || fail "the updater didn't swap in $VERSION"
 [[ ! -e "$INSTALLED.old" && ! -e "$INSTALLED.new" ]] || fail "the updater left a stray .old/.new bundle behind"
-echo "✓ Updater: accepted the signature and updated 0.0.1 → $VERSION"
+echo "✓ Updater: $FROM accepted the signature and updated itself to $VERSION"

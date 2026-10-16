@@ -117,12 +117,32 @@ jobs:
           name: Equinox-macos
           path: build
 
+      - name: Download the published release
+        # The app users have installed right now; this release must be an update it accepts.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release download --pattern Equinox-macos.zip --dir build/previous; then
+            echo "PREVIOUS_ZIP=$PWD/build/previous/Equinox-macos.zip" >> "$GITHUB_ENV"
+          else
+            echo "No published release yet."
+          fi
+
       - name: Sign
         env:
-          EQUINOX_SIGNING_KEY: ${{ secrets.EQUINOX_RELEASE_SIGNING_KEY }}
+          # Release key, a production environment secret. Its public half must be the one embedded in this build.
+          EQUINOX_SIGNING_KEY: ${{ secrets.EQUINOX_SIGNING_KEY }}
+          # During a key rotation only: the retired key, still trusted by installed copies. The first release that
+          # embeds a new public key is signed with this one; delete the secret once that release is out.
+          EQUINOX_PREVIOUS_SIGNING_KEY: ${{ secrets.EQUINOX_RELEASE_SIGNING_KEY }}
         run: |
-          if [[ -z "$EQUINOX_SIGNING_KEY" ]]; then echo "::error::Set the EQUINOX_RELEASE_SIGNING_KEY secret."; exit 1; fi
+          if [[ -z "$EQUINOX_SIGNING_KEY" ]]; then echo "::error::Set the EQUINOX_SIGNING_KEY secret on the production environment."; exit 1; fi
           swift scripts/sign-release.swift build/Equinox-macos.zip
+          if [[ -n "${PREVIOUS_ZIP:-}" && -n "$EQUINOX_PREVIOUS_SIGNING_KEY" ]] \
+              && ! REQUIRE_SIGNATURE=1 scripts/verify-release.sh build/Equinox-macos.zip "$VERSION" >/dev/null 2>&1; then
+            echo "::warning::The published release doesn't trust the current key yet; signing this key-rotation release with the previous key."
+            EQUINOX_SIGNING_KEY="$EQUINOX_PREVIOUS_SIGNING_KEY" swift scripts/sign-release.swift --any-key build/Equinox-macos.zip
+          fi
 
       - name: Verify the updater accepts it
         run: REQUIRE_SIGNATURE=1 scripts/verify-release.sh build/Equinox-macos.zip "$VERSION"
