@@ -15,7 +15,8 @@ enum Snapshots {
 
             let storeDir = FileManager.default.temporaryDirectory.appendingPathComponent("equinox-snapshots-\(UUID().uuidString)")
             let audio = PreviewAudio()
-            let model = AppModel(audio: audio, store: Store(directory: storeDir), loginItem: PreviewLoginItem(), runningApps: PreviewRunningApps())
+            let model = AppModel(audio: audio, store: Store(directory: storeDir), loginItem: PreviewLoginItem(), runningApps: PreviewRunningApps(),
+                                 autoEQ: PreviewAutoEQ(), updates: PreviewUpdates())
             model.completeOnboarding()
             model.selectPreset(Preset.builtIns[4].id)   // Loudness
             let notch = model.addBand(frequency: 3200, gainDB: -5)
@@ -53,6 +54,16 @@ enum Snapshots {
                 componentManufacturer: kAudioUnitManufacturer_Apple, componentFlags: 0, componentFlagsMask: 0))
             editorEngine.attach(reverb)
             save("effect-editor", GenericParameterView(unit: reverb.auAudioUnit).frame(width: 420, height: 520), dir)
+            func await_(_ work: @escaping @MainActor () async -> Void) {
+                var done = false
+                Task { @MainActor in await work(); done = true }
+                while !done { RunLoop.main.run(until: Date().addingTimeInterval(0.02)) }
+            }
+            await_ { await model.searchAutoEQ("airpods pro") }
+            await_ { await model.applyAutoEQ(model.autoEQResults[0]) }
+            model.updateHeadphones { $0.crossfeed = .medium }
+            await_ { await model.checkForUpdates(userInitiated: true) }
+            save("headphones", HeadphonesPage(model: model).frame(width: 900).background(bg), dir)
             save("settings", SettingsPage(model: model).frame(width: 760).background(bg), dir)
             save("onboarding", OnboardingView(model: model, spectrum: spectrum).background(bg), dir)
             save("main-window", MainWindow(model: model, spectrum: spectrum, meters: meters), dir, size: CGSize(width: 1100, height: 680))
@@ -100,6 +111,8 @@ final class PreviewAudio: AudioControlling {
     var dedicated: [DedicatedStrip] = []
     func audioProcesses() -> [AudioProcessInfo] { processes }
     func setDedicatedStrips(_ strips: [DedicatedStrip]) { dedicated = strips }
+    var spatial: SpatialParameters?
+    func setSpatial(_ p: SpatialParameters?) { spatial = p }
     var effects: [EffectSlot] = []
     var effectStates: [UUID: Data] = [:]
     var onEffectParametersChanged: (() -> Void)?
@@ -108,8 +121,8 @@ final class PreviewAudio: AudioControlling {
     func effectUnit(for id: UUID) -> AUAudioUnit? { nil }
     func captureEffectStates() -> [UUID: Data] { effectStates }
     func installedPlugins() -> [AudioUnitID] { PluginCatalog.installedEffects() }
-    private let devices = [AudioDevice(id: 1, uid: "speakers", name: "MacBook Pro Speakers", transportType: 0),
-                           AudioDevice(id: 2, uid: "airpods", name: "AirPods Pro", transportType: 0)]
+    private let devices = [AudioDevice(id: 1, uid: "airpods", name: "AirPods Pro", transportType: 0, isHeadphones: true),
+                           AudioDevice(id: 2, uid: "speakers", name: "MacBook Pro Speakers", transportType: 0)]
 
     func start() {
         onStatusChange?(.running(deviceName: devices[0].name, sampleRate: 48_000))
@@ -134,5 +147,29 @@ final class PreviewRunningApps: RunningAppsProviding {
         [RunningAppInfo(bundleID: "com.apple.Music", name: "Music"),
          RunningAppInfo(bundleID: "com.google.Chrome", name: "Google Chrome"),
          RunningAppInfo(bundleID: "us.zoom.xos", name: "zoom.us")]
+    }
+}
+
+final class PreviewAutoEQ: AutoEQProviding {
+    func entries() async throws -> [AutoEQEntry] {
+        [AutoEQEntry(name: "Apple AirPods Pro", source: "crinacle", rig: "711", path: "./crinacle/711%20in-ear/Apple%20AirPods%20Pro"),
+         AutoEQEntry(name: "Apple AirPods Pro", source: "Super Review", rig: nil, path: "./Super%20Review/in-ear/Apple%20AirPods%20Pro"),
+         AutoEQEntry(name: "Apple AirPods Pro 2", source: "crinacle", rig: "711", path: "./crinacle/711%20in-ear/Apple%20AirPods%20Pro%202")]
+    }
+    func profile(for entry: AutoEQEntry) async throws -> CorrectionProfile {
+        CorrectionProfile(name: entry.name, source: entry.source, preampDB: -5.2, bands: [
+            EQBand(type: .lowShelf, frequency: 105, gainDB: 3.5, q: 0.7), EQBand(type: .peak, frequency: 2800, gainDB: -4, q: 1.8),
+            EQBand(type: .peak, frequency: 6200, gainDB: 5, q: 2.5), EQBand(type: .highShelf, frequency: 10000, gainDB: -2, q: 0.7)])
+    }
+}
+
+final class PreviewUpdates: UpdateProviding {
+    func stage(_ release: ReleaseInfo) async throws -> URL { throw UpdateError.badArchive }
+    func verify(appAt app: URL, newerThan current: String) throws {}
+    func launchReplacement(current: URL, replacement: URL) throws {}
+    func latestRelease() async throws -> ReleaseInfo {
+        ReleaseInfo(version: "0.5.0", downloadURL: URL(string: "https://github.com/north-built-labs/equinox/releases/download/v0.5.0/Equinox-macos.zip")!,
+                    signatureURL: URL(string: "https://github.com/north-built-labs/equinox/releases/download/v0.5.0/Equinox-macos.zip.sig")!,
+                    pageURL: URL(string: "https://github.com/north-built-labs/equinox/releases")!)
     }
 }

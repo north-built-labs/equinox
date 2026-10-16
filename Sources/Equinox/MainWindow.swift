@@ -3,13 +3,14 @@ import EquinoxCore
 import SwiftUI
 
 enum Page: String, CaseIterable, Identifiable {
-    case equalizer = "Equalizer", mixer = "Mixer", effects = "Effects", settings = "Settings"
+    case equalizer = "Equalizer", mixer = "Mixer", effects = "Effects", headphones = "Headphones", settings = "Settings"
     var id: String { rawValue }
     var icon: String {
         switch self {
         case .equalizer: "slider.vertical.3"
         case .mixer: "slider.horizontal.below.square.and.square.filled"
         case .effects: "wand.and.stars"
+        case .headphones: "headphones"
         case .settings: "gearshape"
         }
     }
@@ -32,6 +33,7 @@ struct MainWindow: View {
                 case .equalizer: EqualizerPage(model: model, spectrum: spectrum)
                 case .mixer: MixerPage(model: model, meters: meters)
                 case .effects: EffectsPage(model: model)
+                case .headphones: HeadphonesPage(model: model)
                 case .settings: SettingsPage(model: model)
                 }
             }
@@ -114,6 +116,25 @@ struct SettingsPage: View {
             VStack(alignment: .leading, spacing: 10) {
                 Text("General").font(.headline)
                 Toggle("Launch Equinox at login", isOn: $model.launchAtLogin)
+            }.frame(maxWidth: .infinity, alignment: .leading).glassCard()
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Updates").font(.headline)
+                Text("You have Equinox \(model.currentVersion).").font(.callout)
+                Toggle("Check for updates automatically", isOn: $model.checkForUpdatesAutomatically)
+                HStack {
+                    Button("Check Now") { Task { await model.checkForUpdates(userInitiated: true) } }
+                    if let release = model.availableUpdate {
+                        Button("Install \(release.version) & Relaunch") {
+                            Task { if await model.installUpdate() { NSApp.terminate(nil) } }
+                        }
+                        .keyboardShortcut(.defaultAction)
+                        .disabled(model.isInstallingUpdate)
+                        if model.isInstallingUpdate { ProgressView().controlSize(.small) }
+                        Link("Release notes", destination: release.pageURL).font(.caption)
+                    }
+                }
+                if let status = model.updateStatus { Text(status).font(.caption).foregroundStyle(.secondary) }
             }.frame(maxWidth: .infinity, alignment: .leading).glassCard()
 
             VStack(alignment: .leading, spacing: 10) {

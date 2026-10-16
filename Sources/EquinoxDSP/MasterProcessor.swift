@@ -6,6 +6,10 @@ public final class MasterProcessor {
     public let maxFrames: Int
     public let limiter: PeakLimiter
     private let eq: BiquadBank
+    private let correction: BiquadBank
+    private var correctionActive = false
+    private let crossfeed: Crossfeed
+    private var sampleRate: Double
     private var hasConfig = false
     private var currentLeft: Float = 1, currentRight: Float = 1
     private var targetLeft: Float = 1, targetRight: Float = 1
@@ -13,6 +17,9 @@ public final class MasterProcessor {
     public init(maxFrames: Int, sampleRate: Double) {
         self.maxFrames = maxFrames
         eq = BiquadBank(maxFrames: maxFrames)
+        correction = BiquadBank(maxFrames: maxFrames)
+        crossfeed = Crossfeed(sampleRate: sampleRate)
+        self.sampleRate = sampleRate
         limiter = PeakLimiter(sampleRate: sampleRate)
     }
 
@@ -22,6 +29,15 @@ public final class MasterProcessor {
         targetLeft = config.leftGain; targetRight = config.rightGain
         if !hasConfig { currentLeft = targetLeft; currentRight = targetRight }
         limiter.setSampleRate(config.sampleRate)
+        if let c = config.correctionCoefficients {
+            correction.setCoefficients(c, ramp: correctionActive)
+            correctionActive = true
+        } else if correctionActive {
+            correctionActive = false
+            correction.reset()
+        }
+        sampleRate = config.sampleRate
+        crossfeed.configure(config.crossfeed, sampleRate: config.sampleRate)
         hasConfig = true
     }
 
@@ -34,9 +50,11 @@ public final class MasterProcessor {
     /// EQ stage (before the effects chain). Realtime-safe, in place, any frame count.
     public func processPre(left: UnsafeMutablePointer<Float>, right: UnsafeMutablePointer<Float>, frames: Int) {
         forEachChunk(frames) { o, n in
+            if correctionActive { correction.process(left: left + o, right: right + o, frames: n) }
             eq.process(left: left + o, right: right + o, frames: n)
             if !Self.isFinite(left + o, right + o, n) {
                 eq.reset()
+                correction.reset()
                 (left + o).update(repeating: 0, count: n); (right + o).update(repeating: 0, count: n)
             }
         }
@@ -49,6 +67,7 @@ public final class MasterProcessor {
                 limiter.reset()
                 (left + o).update(repeating: 0, count: n); (right + o).update(repeating: 0, count: n)
             }
+            crossfeed.process(left: left + o, right: right + o, frames: n)
             ramp(left + o, &currentLeft, targetLeft, n)
             ramp(right + o, &currentRight, targetRight, n)
             limiter.process(left: left + o, right: right + o, frames: n)

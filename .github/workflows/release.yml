@@ -1,0 +1,83 @@
+name: Build & Release
+
+# Pull requests: build the universal app and run the tests.
+# Every push to main (i.e. every merge): build, test, then publish a signed GitHub release.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  # Releases queue one at a time; superseded PR runs are cancelled.
+  group: ${{ github.event_name == 'push' && 'release' || format('ci-{0}', github.ref) }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      IS_RELEASE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Select the newest Xcode
+        run: |
+          sudo xcode-select -s "$(ls -d /Applications/Xcode*.app | sort -V | tail -1)"
+          xcodebuild -version
+          swift --version
+
+      - name: Test
+        # AudioSystemTests need real audio hardware, which hosted runners don't have.
+        run: swift test --skip AudioSystemTests
+
+      - name: Choose release version
+        id: version
+        if: env.IS_RELEASE == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="$(scripts/release-version.sh)"
+          echo "Releasing $version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Build universal app
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          BUILD_NUMBER: ${{ github.run_number }}
+          EQUINOX_SIGNING_KEY: ${{ env.IS_RELEASE == 'true' && secrets.EQUINOX_RELEASE_SIGNING_KEY || '' }}
+        run: scripts/build-app.sh --release
+
+      - name: Upload build (pull requests)
+        if: env.IS_RELEASE != 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: Equinox-macos
+          path: build/Equinox-macos.zip
+          retention-days: 7
+
+      - name: Publish release
+        if: env.IS_RELEASE == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          test -f build/Equinox-macos.zip.sig || { echo "::error::Release archive is unsigned; set the EQUINOX_RELEASE_SIGNING_KEY secret."; exit 1; }
+          sum="$(shasum -a 256 build/Equinox-macos.zip | cut -d' ' -f1)"
+          {
+            echo "**Install or update**"
+            echo '```sh'
+            echo 'curl -fsSL https://raw.githubusercontent.com/north-built-labs/equinox/main/install.sh | bash'
+            echo '```'
+            echo "Already installed? Equinox offers this update in **Settings → Updates**."
+            echo
+            echo "Universal (Apple silicon + Intel), macOS 15+. \`Equinox-macos.zip\` SHA-256: \`$sum\`"
+          } > notes.md
+          gh release create "v$VERSION" build/Equinox-macos.zip build/Equinox-macos.zip.sig \
+            --title "Equinox $VERSION" --target "$GITHUB_SHA" --notes-file notes.md --generate-notes

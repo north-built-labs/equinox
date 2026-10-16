@@ -44,6 +44,8 @@ public protocol AudioControlling: AnyObject {
     func effectUnit(for id: UUID) -> AUAudioUnit?
     func captureEffectStates() -> [UUID: Data]
     func installedPlugins() -> [AudioUnitID]
+    /// Spatial (HRTF) renderer parameters; nil removes it. Parameter changes apply live.
+    func setSpatial(_ parameters: SpatialParameters?)
 }
 
 @MainActor
@@ -122,6 +124,21 @@ public final class AudioController: AudioControlling {
     public func effectUnit(for id: UUID) -> AUAudioUnit? { chain?.unit(for: id) }
     public func captureEffectStates() -> [UUID: Data] { chain?.captureStates() ?? [:] }
     public func installedPlugins() -> [AudioUnitID] { PluginCatalog.installedEffects() }
+
+    private var spatial: SpatialRenderer?
+    private var spatialParameters: SpatialParameters?
+
+    public func setSpatial(_ parameters: SpatialParameters?) {
+        spatialParameters = parameters
+        guard let parameters else {
+            if spatial != nil { spatial = nil; renderer.submitSpatial(nil) }
+            return
+        }
+        let rate = session?.sampleRate ?? 48_000
+        if let spatial, spatial.sampleRate == rate { spatial.set(parameters); return }
+        spatial = try? SpatialRenderer(sampleRate: rate, parameters: parameters)
+        renderer.submitSpatial(spatial)
+    }
 
     /// Builds a new chain off the audio thread, carrying live parameter state over; the newest build wins.
     private func buildChain(carryLiveState: Bool = true) {
@@ -243,6 +260,12 @@ public final class AudioController: AudioControlling {
                 try newSession.prepare(renderer: renderer)
                 renderer.submit(DSPConfig(settings: settings, sampleRate: newSession.sampleRate, stripOrder: newSession.stripKeys))
                 if let chain, chain.sampleRate == newSession.sampleRate { renderer.submitEffects(chain) }
+                if let params = spatialParameters {
+                    if spatial?.sampleRate != newSession.sampleRate {
+                        spatial = try? SpatialRenderer(sampleRate: newSession.sampleRate, parameters: params)
+                    }
+                    renderer.submitSpatial(spatial)
+                }
                 try newSession.startIO()
             } catch {
                 newSession.invalidate()
@@ -255,6 +278,12 @@ public final class AudioController: AudioControlling {
             sessionGeneration += 1
             sessionStartNanos = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
             deviceListeners = [
+                try? PropertyListener(object: deviceID, selector: kAudioDevicePropertyDataSource,
+                                      scope: kAudioObjectPropertyScopeOutput) { [weak self] in
+                    MainActor.assumeIsolated {
+                        if let device = try? AudioSystem.describe(deviceID) { self?.onOutputDeviceChange?(device) }
+                    }
+                },
                 try? PropertyListener(object: deviceID, selector: kAudioDevicePropertyNominalSampleRate) { [weak self] in
                     MainActor.assumeIsolated { self?.scheduleRebuild() }
                 },

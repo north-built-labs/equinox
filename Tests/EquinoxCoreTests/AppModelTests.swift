@@ -17,6 +17,8 @@ final class FakeAudio: AudioControlling {
     var dedicated: [DedicatedStrip] = []
     func audioProcesses() -> [AudioProcessInfo] { processes }
     func setDedicatedStrips(_ strips: [DedicatedStrip]) { dedicated = strips }
+    var spatial: SpatialParameters?
+    func setSpatial(_ p: SpatialParameters?) { spatial = p }
     var effects: [EffectSlot] = []
     var effectStates: [UUID: Data] = [:]
     var effectReloads: [Bool] = []

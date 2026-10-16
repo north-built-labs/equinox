@@ -1,9 +1,32 @@
+import EquinoxAudio
+import EquinoxDSP
 import Foundation
 
 public struct DeviceProfile: Codable, Equatable, Sendable {
     public var presetID: UUID
     public var isEnabled: Bool
     public init(presetID: UUID, isEnabled: Bool) { self.presetID = presetID; self.isEnabled = isEnabled }
+}
+
+public struct HeadphoneSettings: Codable, Equatable, Sendable {
+    public var isEnabled = false
+    public var correction: CorrectionProfile?
+    public var crossfeed: CrossfeedStrength = .off
+    public var spatialEnabled = false
+    public var spatial = SpatialParameters()
+
+    public init(isEnabled: Bool = false) { self.isEnabled = isEnabled }
+
+    enum CodingKeys: String, CodingKey { case isEnabled, correction, crossfeed, spatialEnabled, spatial }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        isEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .isEnabled)) ?? false
+        correction = try? c.decodeIfPresent(CorrectionProfile.self, forKey: .correction)
+        crossfeed = (try? c.decodeIfPresent(CrossfeedStrength.self, forKey: .crossfeed)) ?? .off
+        spatialEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .spatialEnabled)) ?? false
+        spatial = (try? c.decodeIfPresent(SpatialParameters.self, forKey: .spatial)) ?? SpatialParameters()
+    }
 }
 
 public struct AppMixSettings: Codable, Equatable, Sendable {
@@ -34,6 +57,11 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var launchAtLogin = false
     public var appMix: [String: AppMixSettings] = [:]
     public var disabledPlugins: [String] = []
+    public var headphones: [String: HeadphoneSettings] = [:]
+    public var headphoneOverrides: [String: Bool] = [:]
+    public var autoEnableHeadphones = true
+    public var checkForUpdates = true
+    public var lastUpdateCheck: Date?
     /// Not persisted: number of presets/profiles skipped while decoding because they were unreadable.
     public var droppedEntries = 0
 
@@ -41,7 +69,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case selectedPresetID, workingPreset, userPresets, isEnabled, volume, boostDB, balance, isMuted,
-             deviceProfiles, hasCompletedOnboarding, launchAtLogin, appMix, disabledPlugins
+             deviceProfiles, hasCompletedOnboarding, launchAtLogin, appMix, disabledPlugins, headphones, headphoneOverrides,
+             autoEnableHeadphones, checkForUpdates, lastUpdateCheck
     }
 
     public init(from decoder: Decoder) throws {
@@ -66,6 +95,12 @@ public struct AppSettings: Codable, Equatable, Sendable {
         let mix = (try? c.decodeIfPresent([String: Lossy<AppMixSettings>].self, forKey: .appMix)) ?? [:]
         appMix = mix.compactMapValues(\.value)
         disabledPlugins = (try? c.decodeIfPresent([String].self, forKey: .disabledPlugins)) ?? []
+        let hp = (try? c.decodeIfPresent([String: Lossy<HeadphoneSettings>].self, forKey: .headphones)) ?? [:]
+        headphones = hp.compactMapValues(\.value)
+        headphoneOverrides = (try? c.decodeIfPresent([String: Bool].self, forKey: .headphoneOverrides)) ?? [:]
+        autoEnableHeadphones = (try? c.decodeIfPresent(Bool.self, forKey: .autoEnableHeadphones)) ?? true
+        checkForUpdates = (try? c.decodeIfPresent(Bool.self, forKey: .checkForUpdates)) ?? true
+        lastUpdateCheck = try? c.decodeIfPresent(Date.self, forKey: .lastUpdateCheck)
         droppedEntries += mix.count - appMix.count
     }
 }

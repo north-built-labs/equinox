@@ -31,7 +31,7 @@
 curl -fsSL https://raw.githubusercontent.com/north-built-labs/equinox/main/install.sh | bash
 ```
 
-<p align="center"><sub>One line. Downloads the app, installs it to /Applications and starts it. <a href="#install">More options</a>.</sub></p>
+<p align="center"><sub>One line. Downloads the app, installs it to /Applications and starts it. After that, Equinox updates itself. <a href="#install">More options</a>.</sub></p>
 
 <br>
 
@@ -58,8 +58,8 @@ curl -fsSL https://raw.githubusercontent.com/north-built-labs/equinox/main/insta
       Volume (0–150%), mute, solo and an EQ preset for each app. Chrome's and Safari's helper processes are grouped under the right app automatically.
     </td>
     <td width="25%" valign="top">
-      <h3>✨ Effects & plugins</h3>
-      Reverb, compressor, multiband, limiter and delay, plus any Audio Unit installed on your Mac, in a chain saved with each preset.
+      <h3>🎧 Effects & headphones</h3>
+      Reverb, compression, delay and any installed Audio Unit, plus AutoEq correction for your headphone model, crossfeed and spatial audio.
     </td>
   </tr>
 </table>
@@ -92,7 +92,20 @@ Every screenshot below is the real app, rendered offscreen from its own views.
     <td width="50%" valign="top">
       <img src="docs/images/effect-editor.png" alt="Generic parameter editor for the built-in reverb: dry/wet mix, gain, delay times, decay times" width="62%">
       <h3>Plugins, safely</h3>
-      Third-party AUv3 plugins load out of process, so a crash can't take Equinox down. AUv2 plugins load in process behind a crash guard: if one crashes while loading, Equinox turns it off on the next launch and tells you.
+      Third-party AUv3 plugins load out of process, so a crash can't take Equinox down. AUv2 plugins load in process behind a crash guard: if one crashes while loading, Equinox turns it off on the next launch and tells you. Effect editors offer the plugin's factory presets, and you can drag cards to reorder the chain.
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/images/headphones.png" alt="The Headphones page: an AutoEq correction for Apple AirPods Pro with its curve, search results, crossfeed set to Medium, and spatial audio controls" width="100%">
+      <h3>Made for headphones</h3>
+      Search the <a href="https://github.com/jaakkopasanen/AutoEq">AutoEq</a> database (thousands of measured models) and apply a correction in one click, or import any <code>ParametricEQ.txt</code>. Then add crossfeed (bass from each side reaches the other ear, while centred sound is untouched) or HRTF spatial audio that puts your stereo on two virtual speakers in front of you.
+    </td>
+    <td width="50%" valign="top">
+      <h3>Smart about outputs</h3>
+      Equinox knows when you're on headphones (the headphone jack, AirPods and other headphones by name, or your own override). It turns the headphone features on for them, and keeps your jack and speaker settings apart even though macOS reports them as one device.
+      <h3>Stays up to date</h3>
+      Equinox checks this repo's releases once a day and installs an update with one click. An update is only installed if it carries a valid Ed25519 signature from the project's release key, is really Equinox, and is newer than what you have.
     </td>
   </tr>
 </table>
@@ -141,7 +154,16 @@ scripts/build-app.sh --run     # build build/Equinox.app and launch it
 swift test                     # unit tests
 ```
 
-`scripts/build-app.sh --release` makes the universal, ad-hoc signed `build/Equinox-macos.zip` that goes on a release. A local build signs with your *Apple Development* certificate if you have one, so macOS remembers the audio permission across rebuilds.
+### Releases
+
+Releases are automatic. Every merge into `main` runs [`.github/workflows/release.yml`](.github/workflows/release.yml), which:
+
+1. builds the universal app and runs the tests,
+2. picks the version: `Resources/Info.plist`'s version if it's newer than the latest release, otherwise the latest release with its patch number bumped,
+3. signs the zip with the release key, stored in the `EQUINOX_RELEASE_SIGNING_KEY` Actions secret and checked against the public key embedded in the app,
+4. publishes a GitHub release. The one-line installer and the in-app updater pick it up.
+
+To start a new minor or major version, raise `CFBundleShortVersionString` in `Resources/Info.plist` in your pull request. Pull requests get a build and a test run, and the built app is attached as a workflow artifact. A local build signs with your *Apple Development* certificate if you have one, so macOS remembers the audio permission across rebuilds.
 
 ## How it works
 
@@ -154,9 +176,9 @@ swift test                     # unit tests
                           │  IOProc (realtime thread)
                           ▼
    per-app strips: EQ → volume/mute ─┐
-                                     ├─► sum ─► EQ (32 biquads, vDSP) ─► effects (AVAudioEngine,
-   ...                              ─┘                                    realtime manual rendering)
-                                                                         ─► volume · balance · boost
+                                     ├─► sum ─► headphone correction (AutoEq) ─► EQ (32 biquads, vDSP)
+   ...                              ─┘     ─► effects (AVAudioEngine, realtime manual rendering)
+                                           ─► crossfeed or HRTF spatial ─► volume · balance · boost
                                                                          ─► peak limiter (−0.3 dBFS) ─► speakers
 ```
 
@@ -168,11 +190,11 @@ swift test                     # unit tests
 ## Testing
 
 ```sh
-swift test               # ~140 unit tests: DSP, renderer, mixer, effects engine, presets, app model
+swift test               # ~175 unit tests: DSP, renderer, mixer, effects engine, presets, app model
 scripts/self-test.sh     # live end-to-end checks on your real audio hardware
 ```
 
-`self-test.sh` plays two quiet test tones (1 kHz and 2.5 kHz, about a minute in total) and measures what Equinox actually outputs at those exact frequencies. Other audio playing at the same time doesn't disturb it. It also renders the screenshots above.
+`self-test.sh` plays two quiet test tones (1 kHz and 2.5 kHz, about a minute and a quarter in total) and measures what Equinox actually outputs at those exact frequencies. Other audio playing at the same time doesn't disturb it. It also renders the screenshots above.
 
 ```
 PASS  tap captures system audio — 1 kHz tone measured at -30.00 dBFS
@@ -182,7 +204,8 @@ PASS  per-app: Other Apps fader doesn't touch a dedicated app — Δ -0.00 dB
 PASS  multi: 3 strips map to the right apps — Δ -6.02/-12.04, swapped -12.04/-6.02
 PASS  effects: installed Audio Unit (AUBandpass) runs — Δ -25.03 dB
 PASS  no feedback after playback stops — 1 kHz residual -180.00 dBFS
-RESULT: all 26 checks passed
+PASS  headphones: crossfeed keeps centred audio unchanged — Δ +0.00 dB
+RESULT: all 29 checks passed
 ```
 
 ## Roadmap
@@ -190,8 +213,9 @@ RESULT: all 26 checks passed
 - [x] **Engine & EQ:** driver-free capture, 32-band parametric/graphic EQ, presets, boost and limiter, per-device memory
 - [x] **Per-app mixer:** volume, mute, solo and EQ per app
 - [x] **Effects & plugins:** built-in effects, Audio Unit hosting, crash protection
-- [ ] **Headphones:** AutoEQ correction for your headphone model, crossfeed, spatial audio, headphone detection
-- [ ] Notarized builds and in-app updates
+- [x] **Headphones:** AutoEq correction, crossfeed, HRTF spatial audio, headphone detection
+- [x] **In-app updates:** signed releases, one-click install
+- [ ] Notarized builds (needs an Apple Developer ID)
 
 > [!IMPORTANT]
 > **Status: alpha.** Every audio path is covered by measured end-to-end checks, run on Apple silicon with built-in speakers and a Bluetooth headset. It hasn't yet seen other hardware, unusual audio interfaces or third-party plugins, so expect rough edges. If something sounds wrong, Equinox's **Enabled** switch or **Quit** always returns your audio to normal. Please [open an issue](https://github.com/north-built-labs/equinox/issues) with your macOS version and output device.
