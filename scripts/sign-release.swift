@@ -1,6 +1,8 @@
 // Ed25519 signing for release archives (verified by the in-app updater).
-//   swift scripts/sign-release.swift <file.zip>     write <file.zip>.sig
-// Key source: $EQUINOX_SIGNING_KEY (base64 raw key; set from the EQUINOX_RELEASE_SIGNING_KEY repo secret in CI),
+//   swift scripts/sign-release.swift <file.zip>              write <file.zip>.sig
+//   swift scripts/sign-release.swift --any-key <file.zip>    skip the embedded-key check (key rotation: the release
+//                                                            that ships a new public key is signed with the old key)
+// Key source: $EQUINOX_SIGNING_KEY (base64 raw key; the EQUINOX_SIGNING_KEY secret on the production environment in CI),
 // else ~/.config/equinox/release-signing-key. The signature is checked against the public key embedded in
 // Sources/EquinoxCore/Updates.swift, so a release can never ship with a signature the app would reject.
 import CryptoKit
@@ -33,10 +35,13 @@ func embeddedPublicKey() -> Data {
     return key
 }
 
-guard let path = CommandLine.arguments.dropFirst().first else { fail("usage: sign-release.swift <archive>") }
+var args = Array(CommandLine.arguments.dropFirst())
+let anyKey = args.first == "--any-key"
+if anyKey { args.removeFirst() }
+guard let path = args.first else { fail("usage: sign-release.swift [--any-key] <archive>") }
 let file = URL(fileURLWithPath: path)
 let key = loadKey()
-guard key.publicKey.rawRepresentation == embeddedPublicKey() else {
+guard anyKey || key.publicKey.rawRepresentation == embeddedPublicKey() else {
     fail("This signing key doesn't match the public key embedded in the app; the updater would reject the release.")
 }
 let signature = try key.signature(for: Data(contentsOf: file))

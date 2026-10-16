@@ -160,8 +160,13 @@ Releases are automatic. Every merge into `main` runs [`.github/workflows/release
 
 1. builds the universal app and runs the tests,
 2. picks the version: `Resources/Info.plist`'s version if it's newer than the latest release, otherwise the latest release with its patch number bumped,
-3. signs the zip with the release key, stored in the `EQUINOX_RELEASE_SIGNING_KEY` Actions secret and checked against the public key embedded in the app,
-4. publishes a GitHub release. The one-line installer and the in-app updater pick it up.
+3. signs the zip with the release key (the `EQUINOX_SIGNING_KEY` secret on the `production` environment, which only `main` can use), checked against the public key embedded in the app,
+4. installs the currently published release and runs its real updater against the new zip; nothing is published unless it accepts the signature and updates itself,
+5. publishes a GitHub release. The one-line installer and the in-app updater pick it up.
+
+`main` is protected: changes land through pull requests, and the `lint` and `build` checks must pass.
+
+**Rotating the signing key:** put the new key's public half in `Sources/EquinoxCore/Updates.swift`, store the old key as the repo secret `EQUINOX_RELEASE_SIGNING_KEY` and the new one as `EQUINOX_SIGNING_KEY` on `production`. The first release then signs with the old key (installed copies still trust it) and every later one with the new key. Delete the old secret once that release is out; anyone who skipped it reinstalls with the one-liner.
 
 To start a new minor or major version, raise `CFBundleShortVersionString` in `Resources/Info.plist` in your pull request. Pull requests get a build and a test run, and the built app is attached as a workflow artifact. A local build signs with your *Apple Development* certificate if you have one, so macOS remembers the audio permission across rebuilds.
 

@@ -1,7 +1,7 @@
 name: Build & Release
 
-# Pull requests: build the universal app and run the tests.
-# Every push to main (i.e. every merge): build, test, then publish a signed GitHub release.
+# Pull requests: lint, build the universal app, run the tests and check the packaged app + installer.
+# Every push to main (i.e. every merge): the same, then sign, prove the in-app updater accepts it, and publish.
 on:
   pull_request:
   push:
@@ -13,15 +13,26 @@ concurrency:
   group: ${{ github.event_name == 'push' && 'release' || format('ci-{0}', github.ref) }}
   cancel-in-progress: ${{ github.event_name != 'push' }}
 
+# Read-only by default; only the release job can write (and only it sees the signing key).
 permissions:
-  contents: write
+  contents: read
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - name: ShellCheck
+        run: shellcheck install.sh scripts/*.sh
+
   build:
     runs-on: macos-26
     timeout-minutes: 45
     env:
       IS_RELEASE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -37,38 +48,119 @@ jobs:
         # AudioSystemTests need real audio hardware, which hosted runners don't have.
         run: swift test --skip AudioSystemTests
 
-      - name: Choose release version
+      - name: Choose version
         id: version
-        if: env.IS_RELEASE == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          version="$(scripts/release-version.sh)"
-          echo "Releasing $version"
+          if [[ "$IS_RELEASE" == "true" ]]; then
+            version="$(scripts/release-version.sh)"
+            if gh release view "v$version" >/dev/null 2>&1; then
+              echo "::error::Release v$version already exists"; exit 1
+            fi
+          else
+            version="$(plutil -extract CFBundleShortVersionString raw Resources/Info.plist)"
+          fi
+          echo "Version $version"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Build universal app
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          VERSION: ${{ env.IS_RELEASE == 'true' && steps.version.outputs.version || '' }}
           BUILD_NUMBER: ${{ github.run_number }}
-          EQUINOX_SIGNING_KEY: ${{ env.IS_RELEASE == 'true' && secrets.EQUINOX_RELEASE_SIGNING_KEY || '' }}
         run: scripts/build-app.sh --release
 
-      - name: Upload build (pull requests)
-        if: env.IS_RELEASE != 'true'
+      - name: Verify packaged app
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: scripts/verify-release.sh build/Equinox-macos.zip "$VERSION"
+
+      - name: Test the installer
+        # Pipes install.sh into bash like users do, against the archive we just built.
+        run: |
+          set -o pipefail
+          dir="$RUNNER_TEMP/install-test"
+          mkdir -p "$dir"   # install.sh falls back to ~/Applications if the directory isn't writable
+          export EQUINOX_INSTALL_DIR="$dir" EQUINOX_NO_LAUNCH=1
+          EQUINOX_DOWNLOAD_URL="file://$PWD/build/Equinox-macos.zip" bash < install.sh | tee install.log
+          if grep -q "building from source" install.log; then echo "::error::install.sh didn't use the archive"; exit 1; fi
+          ditto -x -k build/Equinox-macos.zip "$RUNNER_TEMP/expected"
+          diff -r "$RUNNER_TEMP/expected/Equinox.app" "$dir/Equinox.app"
+          bash -s -- --uninstall < install.sh
+          if [[ -e "$dir/Equinox.app" ]]; then echo "::error::--uninstall left the app behind"; exit 1; fi
+
+      - name: Upload build
         uses: actions/upload-artifact@v7
         with:
           name: Equinox-macos
           path: build/Equinox-macos.zip
           retention-days: 7
 
-      - name: Publish release
-        if: env.IS_RELEASE == 'true'
+  release:
+    needs: [lint, build]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: macos-26
+    timeout-minutes: 20
+    environment: production
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false   # the updater check runs the published app; keep the write token out of .git/config
+
+      - name: Select the newest Xcode
+        run: sudo xcode-select -s "$(ls -d /Applications/Xcode*.app | sort -V | tail -1)"
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: Equinox-macos
+          path: build
+
+      - name: Download the published release
+        # The app users have installed right now; this release must be an update it accepts.
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.version.outputs.version }}
         run: |
-          test -f build/Equinox-macos.zip.sig || { echo "::error::Release archive is unsigned; set the EQUINOX_RELEASE_SIGNING_KEY secret."; exit 1; }
+          if gh release download --pattern Equinox-macos.zip --dir build/previous; then
+            echo "PREVIOUS_ZIP=$PWD/build/previous/Equinox-macos.zip" >> "$GITHUB_ENV"
+          else
+            echo "No published release yet."
+          fi
+
+      - name: Sign
+        env:
+          # Release key, a production environment secret. Its public half must be the one embedded in this build.
+          EQUINOX_SIGNING_KEY: ${{ secrets.EQUINOX_SIGNING_KEY }}
+          # During a key rotation only: the retired key, still trusted by installed copies. The first release that
+          # embeds a new public key is signed with this one; delete the secret once that release is out.
+          EQUINOX_PREVIOUS_SIGNING_KEY: ${{ secrets.EQUINOX_RELEASE_SIGNING_KEY }}
+        # Only signs; nothing downloaded is ever run while the keys are in the environment.
+        run: |
+          if [[ -z "$EQUINOX_SIGNING_KEY" ]]; then echo "::error::Set the EQUINOX_SIGNING_KEY secret on the production environment."; exit 1; fi
+          swift scripts/sign-release.swift build/Equinox-macos.zip
+          if [[ -n "$EQUINOX_PREVIOUS_SIGNING_KEY" ]]; then
+            mkdir -p build/rotation
+            cp build/Equinox-macos.zip build/rotation/
+            EQUINOX_SIGNING_KEY="$EQUINOX_PREVIOUS_SIGNING_KEY" swift scripts/sign-release.swift --any-key build/rotation/Equinox-macos.zip
+          fi
+
+      - name: Verify the updater accepts it
+        # No secrets here. Prefer the current key's signature; fall back to the previous key's only for a rotation release.
+        run: |
+          if ! REQUIRE_SIGNATURE=1 scripts/verify-release.sh build/Equinox-macos.zip "$VERSION"; then
+            [[ -f build/rotation/Equinox-macos.zip.sig ]] || exit 1
+            echo "::warning::The published release doesn't trust the current key yet; using the previous key's signature for this key-rotation release."
+            cp build/rotation/Equinox-macos.zip.sig build/Equinox-macos.zip.sig
+            REQUIRE_SIGNATURE=1 scripts/verify-release.sh build/Equinox-macos.zip "$VERSION"
+          fi
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
           sum="$(shasum -a 256 build/Equinox-macos.zip | cut -d' ' -f1)"
           {
             echo "**Install or update**"
