@@ -7,6 +7,9 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  merge_group:
+  schedule:
+    - cron: "23 6 * * 1"
 
 concurrency:
   # Releases queue one at a time; superseded PR runs are cancelled.
@@ -18,14 +21,79 @@ concurrency:
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
   lint:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Validate workflows
+        run: |
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          "$(go env GOPATH)/bin/actionlint" -color
       - name: ShellCheck
         run: shellcheck install.sh scripts/*.sh
+
+  test:
+    name: Test (${{ matrix.os }}, ${{ matrix.configuration }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-26]
+        configuration: [debug, release]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+          uname -m
+      - name: Test
+        # Keep hardware-independent AudioSystem validation in CI.
+        run: |
+          mkdir -p test-results
+          swift test -c "${{ matrix.configuration }}" --skip 'AudioSystemTests.test(Lists|Resolves)' \
+            --xunit-output test-results/results.xml 2>&1 | tee test-results/test.log
+      - name: Upload test results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tests-${{ matrix.os }}-${{ matrix.configuration }}
+          path: test-results/
+          if-no-files-found: error
+          retention-days: 14
+
+  memory-safety:
+    name: DSP Address Sanitizer
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Test DSP with Address Sanitizer
+        run: |
+          mkdir -p test-results
+          swift test --sanitize address --filter EquinoxDSPTests \
+            --xunit-output test-results/results.xml 2>&1 | tee test-results/test.log
+      - name: Upload sanitizer results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: address-sanitizer
+          path: test-results/
+          if-no-files-found: error
+          retention-days: 14
 
   build:
     runs-on: macos-26
@@ -38,16 +106,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
-      - name: Select the newest Xcode
+      - name: Toolchain
         run: |
-          sudo xcode-select -s "$(ls -d /Applications/Xcode*.app | sort -V | tail -1)"
           xcodebuild -version
           swift --version
 
-      - name: Test
-        # AudioSystemTests need real audio hardware, which hosted runners don't have.
-        run: swift test --skip AudioSystemTests
+      - name: Test release version selection
+        run: bash scripts/test-release-version.sh
 
       - name: Choose version
         id: version
@@ -105,6 +172,24 @@ jobs:
           grep -q "Signature verified" install.log || { echo "::error::install.sh didn't verify the signature"; exit 1; }
           ditto -x -k build/Equinox-macos.zip "$RUNNER_TEMP/expected"
           diff -r "$RUNNER_TEMP/expected/Equinox.app" "$dir/Equinox.app"
+
+          # Failed updates must leave the installed app byte-for-byte intact.
+          mkdir -p "$RUNNER_TEMP/unsigned"
+          cp build/Equinox-macos.zip "$RUNNER_TEMP/unsigned/"
+          ssh-keygen -q -t ed25519 -N '' -f "$RUNNER_TEMP/wrong-key"
+          echo "equinox-release namespaces=\"equinox-release\" $(cut -d' ' -f1,2 "$RUNNER_TEMP/wrong-key.pub")" > "$RUNNER_TEMP/wrong-signers"
+          for scenario in tampered unsigned wrong-key; do
+            url="file://$RUNNER_TEMP/$scenario/Equinox-macos.zip"
+            signers="$RUNNER_TEMP/allowed_signers"
+            if [[ "$scenario" == wrong-key ]]; then
+              url="file://$RUNNER_TEMP/signed/Equinox-macos.zip"
+              signers="$RUNNER_TEMP/wrong-signers"
+            fi
+            if EQUINOX_DOWNLOAD_URL="$url" EQUINOX_ALLOWED_SIGNERS="$signers" bash < install.sh; then
+              echo "::error::install.sh accepted $scenario"; exit 1
+            fi
+            diff -r "$RUNNER_TEMP/expected/Equinox.app" "$dir/Equinox.app"
+          done
           bash -s -- --uninstall < install.sh
           if [[ -e "$dir/Equinox.app" ]]; then echo "::error::--uninstall left the app behind"; exit 1; fi
 
@@ -114,9 +199,23 @@ jobs:
           name: Equinox-macos
           path: build/Equinox-macos.zip
           retention-days: 7
+          if-no-files-found: error
+
+  ci:
+    name: CI
+    if: ${{ always() }}
+    needs: [lint, test, memory-safety, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every validation job to pass
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS" | jq -e 'all(.[]; .result == "success")'
 
   release:
-    needs: [lint, build]
+    needs: [ci, build]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: macos-26
     timeout-minutes: 20
@@ -133,8 +232,8 @@ jobs:
         with:
           persist-credentials: false   # the updater check runs the published app; keep the write token out of .git/config
 
-      - name: Select the newest Xcode
-        run: sudo xcode-select -s "$(ls -d /Applications/Xcode*.app | sort -V | tail -1)"
+      - name: Toolchain
+        run: xcodebuild -version
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -146,10 +245,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release download --pattern Equinox-macos.zip --dir build/previous; then
+          # An API/download failure must not silently bypass the upgrade check.
+          # Paginate so draft/prerelease entries cannot hide an older stable release.
+          tag="$(scripts/latest-release-tag.sh)"
+          if [[ -n "$tag" ]]; then
+            gh release download "$tag" --pattern Equinox-macos.zip --dir build/previous
             echo "PREVIOUS_ZIP=$PWD/build/previous/Equinox-macos.zip" >> "$GITHUB_ENV"
           else
-            echo "No published release yet."
+            echo "No published stable release yet; verifying against a version-stamped copy of this build."
           fi
 
       - name: Sign

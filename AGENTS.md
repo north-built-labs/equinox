@@ -30,8 +30,9 @@ Equinox is a native macOS audio application, built with Swift Package Manager.
 - `Sources/Equinox`: executable and UI.
 - `Tests/`: DSP, audio and core tests.
 - `scripts/build-app.sh --release`: packaged universal application.
-- `swift test`: test suite; CI uses `swift test --skip AudioSystemTests`
-  because hosted runners lack real audio hardware.
+- `swift test`: test suite; CI skips only the three AudioSystem hardware/process
+  enumeration tests because hosted runners lack real audio hardware. See
+  `docs/ci.md` for the CI matrix and local equivalents.
 - `shellcheck install.sh scripts/*.sh`: shell lint used by CI.
 - `scripts/verify-release.sh`: packaged app/release verification; read its
   arguments and environment requirements before using it.

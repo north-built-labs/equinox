@@ -50,7 +50,8 @@ case "$MODE" in
         open "$APP"
         ;;
     --release)
-        rm -f build/Equinox-macos.zip
+        # Signatures belong to one exact archive; never retain them across rebuilds.
+        rm -f build/Equinox-macos.zip build/Equinox-macos.zip.sig build/Equinox-macos.zip.sshsig
         ditto -c -k --keepParent "$APP" build/Equinox-macos.zip
         echo "Packaged build/Equinox-macos.zip"
         # The in-app updater only installs archives signed with the release key (see scripts/sign-release.swift).
