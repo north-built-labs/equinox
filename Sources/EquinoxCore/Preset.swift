@@ -47,6 +47,19 @@ public struct Preset: Codable, Hashable, Identifiable, Sendable {
         graphic(id: "00000000-0000-0000-0000-000000000006", name: "Electronic", gains: [5, 4, 1, 0, -2, 1, 0, 1, 4, 5], preampDB: -4),
         graphic(id: "00000000-0000-0000-0000-000000000007", name: "Acoustic", gains: [4, 3, 2, 1, 1, 1, 2, 3, 2, 1], preampDB: -3),
         graphic(id: "00000000-0000-0000-0000-000000000008", name: "Late Night", gains: [-3, -2, 0, 1, 2, 2, 1, 0, -2, -3], preampDB: -2),
+        // Listening starting points, with preamp attenuation for EQ headroom.
+        graphic(id: "00000000-0000-0000-0000-000000000009", name: "Pop", gains: [1, 2, 1, -1, -1, 1, 2, 2, 1, 1], preampDB: -4),
+        graphic(id: "00000000-0000-0000-0000-00000000000A", name: "Rock", gains: [2, 3, 2, -1, -2, 1, 2, 3, 2, 1], preampDB: -5),
+        graphic(id: "00000000-0000-0000-0000-00000000000B", name: "Hip-Hop", gains: [4, 4, 2, 0, -1, 0, 1, 2, 1, 0], preampDB: -6),
+        graphic(id: "00000000-0000-0000-0000-00000000000C", name: "R&B / Soul", gains: [3, 3, 2, 0, 0, 1, 2, 1, 0, -1], preampDB: -5),
+        graphic(id: "00000000-0000-0000-0000-00000000000D", name: "Jazz", gains: [0, 1, 1, 0, 1, 1, 2, 1, 1, 0], preampDB: -4),
+        graphic(id: "00000000-0000-0000-0000-00000000000E", name: "Classical", gains: [1, 1, 0, 0, 0, 0, 1, 1, 2, 1], preampDB: -4),
+        graphic(id: "00000000-0000-0000-0000-00000000000F", name: "Metal", gains: [2, 3, 1, -2, -2, 1, 3, 2, 0, -1], preampDB: -5),
+        graphic(id: "00000000-0000-0000-0000-000000000010", name: "Dance", gains: [4, 3, 1, -1, -2, 0, 1, 2, 3, 2], preampDB: -6),
+        graphic(id: "00000000-0000-0000-0000-000000000011", name: "Latin", gains: [2, 2, 1, -1, 0, 1, 2, 2, 2, 1], preampDB: -4),
+        graphic(id: "00000000-0000-0000-0000-000000000012", name: "Ambient", gains: [2, 2, 1, 0, -1, -1, 0, 1, 2, 2], preampDB: -4),
+        graphic(id: "00000000-0000-0000-0000-000000000013", name: "Podcast — Clarity", gains: [-8, -6, -3, -2, 0, 2, 3, 2, -1, -3], preampDB: -5),
+        graphic(id: "00000000-0000-0000-0000-000000000014", name: "Podcast — Warm", gains: [-6, -4, -1, 1, 1, 1, 2, 0, -3, -4], preampDB: -4),
     ]
 
     /// Accepts a single preset object or an array. Returns user presets with fresh IDs, clamped values.
