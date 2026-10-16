@@ -61,10 +61,17 @@ public final class EffectLoader {
                 throw EffectsError.engineSetup
             }
             let isV3 = component.audioComponentDescription.componentFlags & AudioComponentFlags.isV3AudioUnit.rawValue != 0
-            if !isV3 { pluginGuard?.begin(id) }
-            defer { if !isV3 { pluginGuard?.end() } }
             return try await AVAudioUnit.instantiate(with: description, options: isV3 ? .loadOutOfProcess : [])
         }
+    }
+
+    /// The plugin's ID if it loads in-process (a crash there takes Equinox down), else nil.
+    func inProcessID(_ slot: EffectSlot) -> AudioUnitID? {
+        guard case .audioUnit(let id) = slot.kind,
+              let component = AVAudioUnitComponentManager.shared().components(matching: id.componentDescription).first
+        else { return nil }
+        let isV3 = component.audioComponentDescription.componentFlags & AudioComponentFlags.isV3AudioUnit.rawValue != 0
+        return isV3 ? nil : id
     }
 }
 
@@ -83,10 +90,15 @@ public final class EffectsChain: @unchecked Sendable {
     private let output: UnsafeMutableAudioBufferListPointer
     private let outL: UnsafeMutablePointer<Float>
     private let outR: UnsafeMutablePointer<Float>
+    private var observers: [(AUParameterTree, AUParameterObserverToken)] = []
 
     /// nil when there is nothing to run. A slot whose unit fails to load is skipped.
     @MainActor
     public static func make(slots: [EffectSlot], sampleRate: Double, loader: EffectLoader) async throws -> EffectsChain? {
+        // Guard in-process plugins from instantiation through state restore, initialization and engine start.
+        let guarded = slots.compactMap(loader.inProcessID)
+        for id in guarded { loader.pluginGuard?.begin(id) }
+        defer { for id in guarded { loader.pluginGuard?.end(id) } }
         var loaded: [(EffectSlot, AVAudioUnit)] = []
         for slot in slots {
             if let unit = try? await loader.instantiate(slot) { loaded.append((slot, unit)) }
@@ -133,6 +145,7 @@ public final class EffectsChain: @unchecked Sendable {
     }
 
     deinit {
+        for (tree, token) in observers { tree.removeParameterObserver(token) }
         engine.stop()
         free(input.unsafeMutablePointer)
         free(output.unsafeMutablePointer)
@@ -163,6 +176,17 @@ public final class EffectsChain: @unchecked Sendable {
     public func setBypassed(_ id: UUID, _ bypassed: Bool) { units[id]?.auAudioUnit.shouldBypassEffect = bypassed }
 
     public func unit(for id: UUID) -> AUAudioUnit? { units[id]?.auAudioUnit }
+
+    /// Calls `handler` on the main actor whenever any unit parameter changes (UI, plugin window, automation).
+    public func observeParameters(_ handler: @escaping @MainActor () -> Void) {
+        for unit in units.values {
+            guard let tree = unit.auAudioUnit.parameterTree else { continue }
+            let token = tree.token(byAddingParameterObserver: { _, _ in
+                Task { @MainActor in handler() }
+            })
+            observers.append((tree, token))
+        }
+    }
 
     /// Current parameter state of every unit, as binary plists.
     public func captureStates() -> [UUID: Data] {

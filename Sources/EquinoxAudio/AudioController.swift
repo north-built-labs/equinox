@@ -34,8 +34,13 @@ public protocol AudioControlling: AnyObject {
     func audioProcesses() -> [AudioProcessInfo]
     /// Apps that need their own tap. Changing the set rebuilds the session (debounced).
     func setDedicatedStrips(_ strips: [DedicatedStrip])
-    /// Effect chain in order. Same slots with different enablement are toggled live; anything else rebuilds.
-    func setEffects(_ slots: [EffectSlot])
+    /// Effect chain in order. Same slots with different enablement are toggled live; anything else rebuilds,
+    /// carrying live parameters over — unless `reload`, which rebuilds from the slots' stored state.
+    func setEffects(_ slots: [EffectSlot], reload: Bool)
+    /// A chain parameter changed (user edit, plugin UI, automation). Main actor.
+    var onEffectParametersChanged: (() -> Void)? { get set }
+    /// A new chain was installed (units changed). Main actor.
+    var onEffectsChainChanged: (() -> Void)? { get set }
     func effectUnit(for id: UUID) -> AUAudioUnit?
     func captureEffectStates() -> [UUID: Data]
     func installedPlugins() -> [AudioUnitID]
@@ -101,13 +106,17 @@ public final class AudioController: AudioControlling {
 
     public init(pluginGuard: PluginGuard? = nil) { self.pluginGuard = pluginGuard }
 
-    public func setEffects(_ slots: [EffectSlot]) {
+    public var onEffectParametersChanged: (() -> Void)?
+    public var onEffectsChainChanged: (() -> Void)?
+
+    public func setEffects(_ slots: [EffectSlot], reload: Bool = false) {
         effectSlots = slots
-        if let chain, chain.slots.map(\.id) == slots.map(\.id), chain.slots.map(\.kind) == slots.map(\.kind) {
+        if !reload, let chain, chain.slots.map(\.id) == slots.map(\.id), chain.slots.map(\.kind) == slots.map(\.kind) {
+            chainBuild += 1   // the current chain already matches: cancel any in-flight build for an older request
             for s in slots { chain.setBypassed(s.id, !s.isEnabled) }
             return
         }
-        buildChain()
+        buildChain(carryLiveState: !reload)
     }
 
     public func effectUnit(for id: UUID) -> AUAudioUnit? { chain?.unit(for: id) }
@@ -115,11 +124,11 @@ public final class AudioController: AudioControlling {
     public func installedPlugins() -> [AudioUnitID] { PluginCatalog.installedEffects() }
 
     /// Builds a new chain off the audio thread, carrying live parameter state over; the newest build wins.
-    private func buildChain() {
+    private func buildChain(carryLiveState: Bool = true) {
         chainBuild += 1
         let build = chainBuild
         let rate = session?.sampleRate ?? chain?.sampleRate ?? 48_000
-        let live = chain?.captureStates() ?? [:]
+        let live = carryLiveState ? chain?.captureStates() ?? [:] : [:]
         let slots = effectSlots.map { slot -> EffectSlot in
             var s = slot
             if let state = live[s.id] { s.state = state }
@@ -129,8 +138,10 @@ public final class AudioController: AudioControlling {
         Task { @MainActor [weak self] in
             let built = slots.isEmpty ? nil : try? await EffectsChain.make(slots: slots, sampleRate: rate, loader: loader)
             guard let self, build == self.chainBuild else { return }
+            built?.observeParameters { [weak self] in self?.onEffectParametersChanged?() }
             self.chain = built
             self.renderer.submitEffects(built)
+            self.onEffectsChainChanged?()
         }
     }
 

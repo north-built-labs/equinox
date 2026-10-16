@@ -160,33 +160,74 @@ private struct ParameterRow: View {
 }
 
 /// One window per open effect: the plugin's own UI when it has one, otherwise generic sliders.
+/// Windows follow chain rebuilds: a window whose unit was replaced is reopened on the new unit; a window whose
+/// effect is gone is closed.
 @MainActor
 final class PluginWindows {
     static let shared = PluginWindows()
-    private var windows: [UUID: NSWindow] = [:]
+
+    private struct Entry {
+        let window: NSWindow
+        let unit: AUAudioUnit
+        let closeObserver: NSObjectProtocol
+    }
+
+    private var windows: [UUID: Entry] = [:]
+    private var opening: Set<UUID> = []
 
     func open(slot: EffectSlot, model: AppModel) {
-        if let w = windows[slot.id] { w.makeKeyAndOrderFront(nil); NSApp.activate(); return }
+        if let entry = windows[slot.id] { entry.window.makeKeyAndOrderFront(nil); NSApp.activate(); return }
+        guard !opening.contains(slot.id) else { return }          // a request is already in flight
         guard let unit = model.effectUnit(for: slot.id) else { NSSound.beep(); return }
+        opening.insert(slot.id)
         unit.requestViewController { [weak self] controller in
             DispatchQueue.main.async {
-                guard let self else { return }
-                let content: NSViewController = controller ?? NSHostingController(rootView: GenericParameterView(unit: unit))
-                let window = NSWindow(contentViewController: content)
-                window.title = slot.kind.displayName
-                window.styleMask.insert(.closable)
-                window.isReleasedWhenClosed = false
-                window.appearance = NSAppearance(named: .darkAqua)
-                self.windows[slot.id] = window
-                NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) { [weak self] _ in
-                    MainActor.assumeIsolated { self?.windows[slot.id] = nil }
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.opening.remove(slot.id)
+                    guard model.effectUnit(for: slot.id) === unit else { return }   // chain rebuilt meanwhile
+                    self.present(slot: slot, unit: unit, controller: controller)
                 }
-                window.center()
-                window.makeKeyAndOrderFront(nil)
-                NSApp.activate()
             }
         }
     }
 
-    func close(_ id: UUID) { windows[id]?.close(); windows[id] = nil }
+    private func present(slot: EffectSlot, unit: AUAudioUnit, controller: NSViewController?) {
+        let content: NSViewController = controller ?? NSHostingController(rootView: GenericParameterView(unit: unit))
+        let window = NSWindow(contentViewController: content)
+        window.title = slot.kind.displayName
+        window.styleMask.insert(.closable)
+        window.isReleasedWhenClosed = false
+        window.appearance = NSAppearance(named: .darkAqua)
+        let id = slot.id
+        let observer = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { _ = self?.forget(id) }
+        }
+        windows[id] = Entry(window: window, unit: unit, closeObserver: observer)
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate()
+    }
+
+    /// Call after the effects chain was rebuilt.
+    func revalidate(_ model: AppModel) {
+        for (id, entry) in windows where model.effectUnit(for: id) !== entry.unit {
+            close(id)
+            if let slot = model.working.effects.first(where: { $0.id == id }), model.effectUnit(for: id) != nil {
+                open(slot: slot, model: model)
+            }
+        }
+    }
+
+    func close(_ id: UUID) {
+        guard let entry = forget(id) else { return }
+        entry.window.close()
+    }
+
+    @discardableResult
+    private func forget(_ id: UUID) -> Entry? {
+        guard let entry = windows.removeValue(forKey: id) else { return nil }
+        NotificationCenter.default.removeObserver(entry.closeObserver)
+        return entry
+    }
 }

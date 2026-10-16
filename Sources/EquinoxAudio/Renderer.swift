@@ -36,6 +36,7 @@ final class Mailbox<Value: AnyObject>: @unchecked Sendable {
 
     /// Main thread, only while the IOProc is stopped: nothing on the audio thread holds an entry.
     func reset() {
+        pending.withLock { $0 = nil }   // a never-taken entry must not survive for the audio thread to free
         history.removeAll()
         acknowledged.store(0, ordering: .releasing)
     }

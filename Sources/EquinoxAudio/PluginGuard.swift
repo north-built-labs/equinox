@@ -1,24 +1,37 @@
 import EquinoxDSP
 import Foundation
 
-/// Crash marker for in-process plugin loads: written before instantiation, removed after.
-/// If Equinox dies while loading, the marker survives and names the culprit on the next launch.
+/// Crash marker for in-process plugin loads. Each load adds its plugin to a list in a file before instantiation
+/// and removes one occurrence once the engine has started; overlapping builds therefore keep each other's entries.
+/// If Equinox dies mid-load, the surviving entries name the culprits on the next launch.
 public final class PluginGuard {
     private let url: URL
 
     public init(directory: URL) { url = directory.appendingPathComponent("plugin-loading.json") }
 
-    public func begin(_ id: AudioUnitID) {
-        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try? JSONEncoder().encode(id).write(to: url, options: .atomic)
+    private func read() -> [AudioUnitID] {
+        (try? Data(contentsOf: url)).flatMap { try? JSONDecoder().decode([AudioUnitID].self, from: $0) } ?? []
     }
 
-    public func end() { try? FileManager.default.removeItem(at: url) }
+    private func write(_ ids: [AudioUnitID]) {
+        if ids.isEmpty { try? FileManager.default.removeItem(at: url); return }
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? JSONEncoder().encode(ids).write(to: url, options: .atomic)
+    }
 
-    /// Returns (and clears) the plugin that was loading when Equinox last died, if any.
-    public func takeCrashedPlugin() -> AudioUnitID? {
-        guard let data = try? Data(contentsOf: url) else { return nil }
-        end()
-        return try? JSONDecoder().decode(AudioUnitID.self, from: data)
+    public func begin(_ id: AudioUnitID) { write(read() + [id]) }
+
+    public func end(_ id: AudioUnitID) {
+        var ids = read()
+        if let i = ids.firstIndex(of: id) { ids.remove(at: i) }
+        write(ids)
+    }
+
+    /// Returns (and clears) the plugins that were loading when Equinox last died.
+    public func takeCrashedPlugins() -> [AudioUnitID] {
+        let ids = read()
+        write([])
+        var seen = Set<AudioUnitID>()
+        return ids.filter { seen.insert($0).inserted }
     }
 }

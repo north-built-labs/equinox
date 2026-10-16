@@ -39,7 +39,12 @@ public final class AppModel {
     public var isModified: Bool {
         working.bands != selectedPreset.bands || working.preampDB != selectedPreset.preampDB
             || working.effects.map(\.structure) != selectedPreset.effects.map(\.structure)
+            || effectParametersEdited
     }
+    /// Set when an effect parameter changes (sliders, plugin UI); cleared by save, Save As, select and revert.
+    public private(set) var effectParametersEdited = false
+    /// Called when the audio side installs a new effects chain (open editors must re-target). UI hook.
+    @ObservationIgnored public var onEffectsChainChanged: (() -> Void)?
 
     // MARK: Controls
     public var isEnabled = true { didSet { recordDeviceProfile(); push() } }
@@ -79,9 +84,10 @@ public final class AppModel {
     @ObservationIgnored private var appGroups: [AudioAppGroup] = []
     @ObservationIgnored private var dedicatedKeys: [String] = []
     @ObservationIgnored private var lastPushedEffects: [EffectSlot]?
+    @ObservationIgnored private var reloadEffectsOnNextPush = false
 
     public init(audio: AudioControlling, store: Store = Store(), loginItem: LoginItemControlling = SystemLoginItem(),
-                runningApps: RunningAppsProviding = WorkspaceRunningApps(), crashedPlugin: AudioUnitID? = nil) {
+                runningApps: RunningAppsProviding = WorkspaceRunningApps(), crashedPlugins: [AudioUnitID] = []) {
         self.audio = audio
         self.store = store
         self.loginItem = loginItem
@@ -94,9 +100,10 @@ public final class AppModel {
             store.backup(Self.settingsFile)
             lastError = "Some saved presets couldn't be read and were skipped. The original settings file was backed up."
         }
-        if let crashedPlugin {
-            disabledPluginKeys.insert(crashedPlugin.key)
-            lastError = "\(crashedPlugin.name) crashed while loading and was turned off. You can turn it back on in Effects."
+        if !crashedPlugins.isEmpty {
+            disabledPluginKeys.formUnion(crashedPlugins.map(\.key))
+            let names = crashedPlugins.map(\.name).joined(separator: ", ")
+            lastError = "\(names) crashed while loading and was turned off. You can turn it back on in Effects."
         }
         userPresets = s.userPresets
         selectedPresetID = presets.contains { $0.id == s.selectedPresetID } ? s.selectedPresetID : Preset.flat.id
@@ -117,6 +124,8 @@ public final class AppModel {
         audio.onOutputDeviceChange = { [weak self] in self?.outputDeviceChanged($0) }
         audio.onHardwareVolumeChange = { [weak self] in self?.hardwareVolumeChanged($0) }
         audio.onProcessesChange = { [weak self] in self?.processesChanged($0) }
+        audio.onEffectParametersChanged = { [weak self] in self?.effectParametersEdited = true }
+        audio.onEffectsChainChanged = { [weak self] in self?.onEffectsChainChanged?() }
         devices = audio.outputDevices()
         availablePlugins = audio.installedPlugins()
         processesChanged(audio.audioProcesses())
@@ -140,6 +149,8 @@ public final class AppModel {
         guard let preset = presets.first(where: { $0.id == id }) else { return }
         selectedPresetID = id
         working = preset
+        effectParametersEdited = false
+        reloadEffectsOnNextPush = true   // apply the preset's saved effect settings even if the structure matches
         recordDeviceProfile()
         push()
     }
@@ -176,6 +187,7 @@ public final class AppModel {
         userPresets[i].effects = working.effects
         userPresets[i].preampDB = working.preampDB
         working = userPresets[i]
+        effectParametersEdited = false
         mixerChanged()
     }
 
@@ -183,7 +195,8 @@ public final class AppModel {
         captureEffectStates()
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let preset = Preset(name: trimmed.isEmpty ? "Untitled" : trimmed, preampDB: working.preampDB,
-                            bands: working.bands, isBuiltIn: false, effects: working.effects)
+                            bands: working.bands, isBuiltIn: false,
+                            effects: working.effects.map { var e = $0; e.id = UUID(); return e })   // own slot identities
         userPresets.append(preset)
         selectPreset(preset.id)
     }
@@ -425,9 +438,10 @@ public final class AppModel {
         s.strips = stripSettings()
         audio.apply(s)
         let effects = working.effects.filter { !isDisabledByCrash($0) }
-        if effects.map(\.structure) != lastPushedEffects?.map(\.structure) {
-            audio.setEffects(effects)
+        if reloadEffectsOnNextPush || effects.map(\.structure) != lastPushedEffects?.map(\.structure) {
+            audio.setEffects(effects, reload: reloadEffectsOnNextPush)
             lastPushedEffects = effects
+            reloadEffectsOnNextPush = false
         }
         scheduleSave()
     }

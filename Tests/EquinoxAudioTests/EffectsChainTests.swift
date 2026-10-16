@@ -129,12 +129,12 @@ final class PluginGuardTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: dir) }
         let id = AudioUnitID(type: 1, subType: 2, manufacturer: 3, name: "Crashy", manufacturerName: "X")
         let guardFile = PluginGuard(directory: dir)
-        XCTAssertNil(guardFile.takeCrashedPlugin())
+        XCTAssertTrue(guardFile.takeCrashedPlugins().isEmpty)
         guardFile.begin(id)
-        guardFile.end()
-        XCTAssertNil(guardFile.takeCrashedPlugin())
+        guardFile.end(id)
+        XCTAssertTrue(guardFile.takeCrashedPlugins().isEmpty)
         guardFile.begin(id)                       // "crash" before end()
-        XCTAssertEqual(PluginGuard(directory: dir).takeCrashedPlugin(), id)
-        XCTAssertNil(PluginGuard(directory: dir).takeCrashedPlugin())   // consumed
+        XCTAssertEqual(PluginGuard(directory: dir).takeCrashedPlugins(), [id])
+        XCTAssertTrue(PluginGuard(directory: dir).takeCrashedPlugins().isEmpty)   // consumed
     }
 }

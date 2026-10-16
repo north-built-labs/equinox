@@ -11,11 +11,14 @@ final class AppEnvironment {
 
     private init() {
         let pluginGuard = PluginGuard(directory: Store.defaultDirectory)
-        let crashed = pluginGuard.takeCrashedPlugin()
-        let model = AppModel(audio: AudioController(pluginGuard: pluginGuard), crashedPlugin: crashed)
+        let crashed = pluginGuard.takeCrashedPlugins()
+        let model = AppModel(audio: AudioController(pluginGuard: pluginGuard), crashedPlugins: crashed)
         self.model = model
         spectrum = SpectrumModel(tap: model.analysis, sampleRate: { [weak model] in model?.sampleRate ?? 48_000 })
         meters = MixerMeters(model: model)
+        model.onEffectsChainChanged = { [weak model] in
+            if let model { PluginWindows.shared.revalidate(model) }
+        }
         model.launch()
     }
 }
