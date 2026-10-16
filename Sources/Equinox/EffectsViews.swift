@@ -16,7 +16,7 @@ struct EffectsPage: View {
                 Spacer()
                 addMenu
             }
-            Text("Effects run after the EQ, in order from left to right. They're saved with the preset.")
+            Text("Effects run after the EQ, in order from left to right (drag to reorder). They're saved with the preset.")
                 .font(.caption).foregroundStyle(.secondary)
             if model.working.effects.isEmpty {
                 VStack(spacing: 8) {
@@ -33,6 +33,12 @@ struct EffectsPage: View {
                         ForEach(Array(model.working.effects.enumerated()), id: \.element.id) { index, slot in
                             if index > 0 { Image(systemName: "chevron.right").foregroundStyle(.secondary).padding(.top, 80) }
                             EffectCard(model: model, slot: slot, index: index, count: model.working.effects.count)
+                                .draggable(slot.id.uuidString)
+                                .dropDestination(for: String.self) { items, _ in
+                                    guard let id = items.first.flatMap(UUID.init(uuidString:)) else { return false }
+                                    model.moveEffect(id, to: index)
+                                    return true
+                                }
                         }
                     }
                     .padding(.vertical, 4)
@@ -117,11 +123,21 @@ struct EffectCard: View {
 /// Sliders for every parameter of a unit (used when a plugin has no custom view, and for built-ins).
 struct GenericParameterView: View {
     let unit: AUAudioUnit
+    @State private var refresh = 0
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                ForEach(unit.parameterTree?.allParameters ?? [], id: \.address) { p in ParameterRow(parameter: p) }
+                if let presets = unit.factoryPresets, !presets.isEmpty {
+                    Menu("Preset: \(unit.currentPreset?.name ?? "Custom")") {
+                        ForEach(presets, id: \.number) { p in Button(p.name) { unit.currentPreset = p; refresh += 1 } }
+                    }
+                    .menuStyle(.button).controlSize(.small)
+                }
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(unit.parameterTree?.allParameters ?? [], id: \.address) { p in ParameterRow(parameter: p) }
+                }
+                .id(refresh)
             }
             .padding(18)
         }

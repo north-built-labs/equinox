@@ -3,6 +3,7 @@
 #   scripts/build-app.sh            build (host architecture)
 #   scripts/build-app.sh --run      build, then (re)launch
 #   scripts/build-app.sh --release  universal (Apple silicon + Intel) build, ad-hoc signed, zipped to build/Equinox-macos.zip
+#                                   and Ed25519-signed (build/Equinox-macos.zip.sig) for the in-app updater
 # Env: SIGN_ID=<identity> to choose a signing identity (default: "Apple Development" if installed, else ad-hoc).
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -44,5 +45,11 @@ case "$MODE" in
         rm -f build/Equinox-macos.zip
         ditto -c -k --keepParent "$APP" build/Equinox-macos.zip
         echo "Packaged build/Equinox-macos.zip"
+        # The in-app updater only installs archives signed with the release key (see scripts/sign-release.swift).
+        if [[ -f "$HOME/.config/equinox/release-signing-key" ]]; then
+            swift scripts/sign-release.swift build/Equinox-macos.zip
+        else
+            echo "warning: no release signing key; build/Equinox-macos.zip is unsigned and the in-app updater will refuse it" >&2
+        fi
         ;;
 esac

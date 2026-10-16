@@ -1,3 +1,4 @@
+import CryptoKit
 import XCTest
 @testable import EquinoxCore
 
@@ -11,10 +12,11 @@ final class UpdatesTests: XCTestCase {
     }
 
     func testParsesLatestReleaseJSON() throws {
-        let json = #"{"tag_name":"v0.5.0","html_url":"https://github.com/north-built-labs/equinox/releases/tag/v0.5.0","assets":[{"name":"notes.txt","browser_download_url":"https://x/notes.txt"},{"name":"Equinox-macos.zip","browser_download_url":"https://github.com/north-built-labs/equinox/releases/download/v0.5.0/Equinox-macos.zip"}]}"#
+        let json = #"{"tag_name":"v0.5.0","html_url":"https://github.com/north-built-labs/equinox/releases/tag/v0.5.0","assets":[{"name":"notes.txt","browser_download_url":"https://x/notes.txt"},{"name":"Equinox-macos.zip","browser_download_url":"https://github.com/north-built-labs/equinox/releases/download/v0.5.0/Equinox-macos.zip"},{"name":"Equinox-macos.zip.sig","browser_download_url":"https://github.com/north-built-labs/equinox/releases/download/v0.5.0/Equinox-macos.zip.sig"}]}"#
         let r = try UpdateChecker.parseLatest(Data(json.utf8))
         XCTAssertEqual(r.version, "0.5.0")
         XCTAssertEqual(r.downloadURL.lastPathComponent, "Equinox-macos.zip")
+        XCTAssertEqual(r.signatureURL.lastPathComponent, "Equinox-macos.zip.sig")
         XCTAssertThrowsError(try UpdateChecker.parseLatest(Data(#"{"tag_name":"v1","assets":[]}"#.utf8)))
     }
 
@@ -45,5 +47,40 @@ final class UpdatesTests: XCTestCase {
         XCTAssertLessThan(wait.lowerBound, remove.lowerBound)
         XCTAssertTrue(s.contains("'/Applications/Equinox.app'"))
         XCTAssertTrue(s.contains("open '/Applications/Equinox.app'"))
+    }
+
+    func testUnsignedReleaseIsRejected() {
+        let json = #"{"tag_name":"v0.5.0","assets":[{"name":"Equinox-macos.zip","browser_download_url":"https://x/Equinox-macos.zip"}]}"#
+        XCTAssertThrowsError(try UpdateChecker.parseLatest(Data(json.utf8))) { XCTAssertEqual($0 as? UpdateError, .unsigned) }
+    }
+
+    func testSignatureVerification() throws {
+        let key = Curve25519.Signing.PrivateKey()
+        let archive = Data("release bytes".utf8)
+        let signature = try key.signature(for: archive)
+        let publicKey = key.publicKey.rawRepresentation
+        XCTAssertNoThrow(try UpdateInstaller.verifySignature(of: archive, signature: signature, publicKey: publicKey))
+        XCTAssertThrowsError(try UpdateInstaller.verifySignature(of: Data("tampered".utf8), signature: signature, publicKey: publicKey))
+        XCTAssertThrowsError(try UpdateInstaller.verifySignature(of: archive, signature: Data(repeating: 0, count: 64), publicKey: publicKey))
+        XCTAssertThrowsError(try UpdateInstaller.verifySignature(of: archive, signature: signature,
+                                                                 publicKey: Curve25519.Signing.PrivateKey().publicKey.rawRepresentation))
+    }
+
+    func testStageRefusesBadSignatureBeforeUnpacking() async throws {
+        let f = FakeFetcher()
+        let release = ReleaseInfo(version: "0.5.0", downloadURL: URL(string: "https://x/Equinox-macos.zip")!,
+                                  signatureURL: URL(string: "https://x/Equinox-macos.zip.sig")!, pageURL: URL(string: "https://x")!)
+        f.responses[release.downloadURL.absoluteString] = Data("evil zip".utf8)
+        f.responses[release.signatureURL.absoluteString] = Data(repeating: 1, count: 64)
+        do {
+            _ = try await UpdateInstaller.stage(release, fetcher: f)
+            XCTFail("expected rejection")
+        } catch {
+            XCTAssertEqual(error as? UpdateError, .badSignature)
+        }
+    }
+
+    func testEmbeddedPublicKeyIsValid() {
+        XCTAssertNotNil(try? Curve25519.Signing.PublicKey(rawRepresentation: UpdateInstaller.releasePublicKey))
     }
 }

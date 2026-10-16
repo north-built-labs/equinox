@@ -1,15 +1,18 @@
+import CryptoKit
 import Foundation
 
 public struct ReleaseInfo: Equatable, Sendable {
     public let version: String
     public let downloadURL: URL
+    /// Detached Ed25519 signature of the archive (`<asset>.sig`).
+    public let signatureURL: URL
     public let pageURL: URL
-    public init(version: String, downloadURL: URL, pageURL: URL) {
-        self.version = version; self.downloadURL = downloadURL; self.pageURL = pageURL
+    public init(version: String, downloadURL: URL, signatureURL: URL, pageURL: URL) {
+        self.version = version; self.downloadURL = downloadURL; self.signatureURL = signatureURL; self.pageURL = pageURL
     }
 }
 
-public enum UpdateError: Error, Equatable { case noAsset, notEquinox, notNewer, badArchive }
+public enum UpdateError: Error, Equatable { case noAsset, unsigned, badSignature, notEquinox, notNewer, badArchive }
 
 public enum UpdateChecker {
     public static let assetName = "Equinox-macos.zip"
@@ -20,8 +23,9 @@ public enum UpdateChecker {
         struct Release: Decodable { let tag_name: String; let html_url: URL?; let assets: [Asset] }
         let r = try JSONDecoder().decode(Release.self, from: json)
         guard let asset = r.assets.first(where: { $0.name == assetName }) else { throw UpdateError.noAsset }
+        guard let signature = r.assets.first(where: { $0.name == assetName + ".sig" }) else { throw UpdateError.unsigned }
         let version = r.tag_name.hasPrefix("v") ? String(r.tag_name.dropFirst()) : r.tag_name
-        return ReleaseInfo(version: version, downloadURL: asset.browser_download_url,
+        return ReleaseInfo(version: version, downloadURL: asset.browser_download_url, signatureURL: signature.browser_download_url,
                            pageURL: r.html_url ?? URL(string: "https://github.com/north-built-labs/equinox/releases")!)
     }
 
@@ -53,9 +57,21 @@ public final class GitHubUpdates: UpdateProviding, @unchecked Sendable {
 }
 
 public enum UpdateInstaller {
-    /// Downloads and unpacks the release; returns the staged Equinox.app (not yet verified).
+    /// Ed25519 public key whose private half signs release archives (scripts/sign-release.swift).
+    /// Updates whose signature doesn't verify against it are never unpacked.
+    public static let releasePublicKey = Data(base64Encoded: "/CLOa2msNt88AUDxOWJd/c5X+AWrBiyd0BbqANbfjSg=")!
+
+    public static func verifySignature(of archive: Data, signature: Data, publicKey: Data = releasePublicKey) throws {
+        guard let key = try? Curve25519.Signing.PublicKey(rawRepresentation: publicKey),
+              key.isValidSignature(signature, for: archive) else { throw UpdateError.badSignature }
+    }
+
+    /// Downloads the release and its signature, verifies the signature, then unpacks; returns the staged
+    /// Equinox.app (bundle identity and version are checked separately by `verify`).
     public static func stage(_ release: ReleaseInfo, fetcher: DataFetching = URLSessionFetching()) async throws -> URL {
+        let signature = try await fetcher.data(from: release.signatureURL)
         let data = try await fetcher.data(from: release.downloadURL)
+        try verifySignature(of: data, signature: signature)
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("equinox-update-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let zip = dir.appendingPathComponent(UpdateChecker.assetName)

@@ -14,6 +14,7 @@ final class FakeAutoEQ: AutoEQProviding {
 
 final class FakeUpdates: UpdateProviding {
     var release = ReleaseInfo(version: "9.9.9", downloadURL: URL(string: "https://example.com/Equinox-macos.zip")!,
+                              signatureURL: URL(string: "https://example.com/Equinox-macos.zip.sig")!,
                               pageURL: URL(string: "https://example.com")!)
     func latestRelease() async throws -> ReleaseInfo { release }
 }
@@ -121,7 +122,8 @@ final class HeadphoneModelTests: XCTestCase {
         let m = makeModel()
         await m.checkForUpdates(userInitiated: true)
         XCTAssertEqual(m.availableUpdate?.version, "9.9.9")
-        let current = FakeUpdates(); current.release = ReleaseInfo(version: "0.0.1", downloadURL: current.release.downloadURL, pageURL: current.release.pageURL)
+        let current = FakeUpdates(); current.release = ReleaseInfo(version: "0.0.1", downloadURL: current.release.downloadURL,
+                                      signatureURL: current.release.signatureURL, pageURL: current.release.pageURL)
         let m2 = makeModel(updates: current)
         await m2.checkForUpdates(userInitiated: true)
         XCTAssertNil(m2.availableUpdate)

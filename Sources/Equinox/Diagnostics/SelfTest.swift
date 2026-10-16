@@ -40,7 +40,7 @@ final class SelfTest {
             check("engine starts", true, "\(name) @ \(Int(rate)) Hz")
         }
 
-        do { player = try startTone(frequency: Self.toneHz, seconds: 60, name: "tone1") } catch {
+        do { player = try startTone(frequency: Self.toneHz, seconds: 70, name: "tone1") } catch {
             check("test tone plays", false, "\(error)")
             finish()
         }
@@ -90,6 +90,7 @@ final class SelfTest {
         await perAppChecks(flat: flat)
         await multiStripChecks(flat1: flat)
         await effectsChecks(flat: flat)
+        await headphoneChecks(flat: flat)
 
         audio.apply(DSPSettings())
         audio.restart()
@@ -181,6 +182,29 @@ final class SelfTest {
         await sleep(1.0)
         let cleared = await measure(DSPSettings())
         check("effects: rapid edits converge to the last (none)", abs(cleared - flat) < 0.5, "Δ \(fmt(cleared - flat)) dB")
+    }
+
+    /// Correction stacks with the user EQ, crossfeed leaves the centred tone unchanged, spatial renders.
+    private func headphoneChecks(flat: Double) async {
+        var s = DSPSettings()
+        s.correction = CorrectionProfile(name: "test", source: "self-test", preampDB: 0,
+                                         bands: [EQBand(type: .peak, frequency: 1000, gainDB: 6, q: 1)])
+        let corrected = await measure(s)
+        s.bands = [EQBand(type: .peak, frequency: 1000, gainDB: 6, q: 1)]
+        let stacked = await measure(s)
+        check("headphones: correction +6 dB, stacks with EQ to +12 dB",
+              abs(corrected - flat - 6) < 0.5 && abs(stacked - flat - 12) < 0.5,
+              "Δ \(fmt(corrected - flat)) / \(fmt(stacked - flat)) dB")
+
+        var cf = DSPSettings(); cf.crossfeed = .high
+        let crossfed = await measure(cf)
+        check("headphones: crossfeed keeps centred audio unchanged", abs(crossfed - flat) < 0.3, "Δ \(fmt(crossfed - flat)) dB")
+
+        var sp = DSPSettings(); sp.spatialEnabled = true
+        audio.setSpatial(SpatialParameters(room: 0))
+        let spatial = await measure(sp)
+        check("headphones: spatial renders at a sane level", abs(spatial - flat) < 6, "Δ \(fmt(spatial - flat)) dB")
+        audio.setSpatial(nil)
     }
 
     // MARK: Measurement
