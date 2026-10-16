@@ -16,6 +16,11 @@ public struct DSPSettings: Codable, Equatable, Sendable {
     public var isMuted = false
     /// Per-app strips (Phase 2). Mapped to the session's tap order by key.
     public var strips: [StripSettings] = []
+    /// Headphone correction (AutoEq), applied before the user EQ.
+    public var correction: CorrectionProfile?
+    public var crossfeed: CrossfeedStrength = .off
+    /// Spatial audio runs in the audio layer; when on, crossfeed is skipped.
+    public var spatialEnabled = false
 
     public init() {}
 }
@@ -28,6 +33,9 @@ public final class DSPConfig: @unchecked Sendable {
     public let leftGain: Float
     public let rightGain: Float
     public let strips: [StripConfig]
+    public let correctionCoefficients: [Double]?
+    public let crossfeed: CrossfeedStrength
+    public let spatialEnabled: Bool
 
     public init(settings s: DSPSettings, sampleRate: Double, stripOrder: [String] = [StripSettings.othersKey]) {
         self.sampleRate = sampleRate
@@ -40,8 +48,16 @@ public final class DSPConfig: @unchecked Sendable {
         let volume = min(max(s.softwareVolume.isFinite ? s.softwareVolume : 1, 0), 1)
         let boost = Decibels.toLinear(min(max(s.boostDB.isFinite ? s.boostDB : 0, 0), DSPSettings.maxBoostDB))
         let preamp = s.isBypassed ? 1 : Decibels.toLinear(min(max(s.preampDB.isFinite ? s.preampDB : 0, -24), 24))
+        let correction = s.isBypassed ? nil : s.correction
+        correctionCoefficients = correction.map { c in
+            BiquadBank.flatten(c.bands.lazy.filter(\.isEnabled).prefix(BiquadBank.maxSections)
+                .map { BiquadCoefficients(band: $0, sampleRate: sampleRate) })
+        }
+        let correctionPreamp = correction.map { Decibels.toLinear(min(max($0.preampDB, -24), 24)) } ?? 1
+        spatialEnabled = !s.isBypassed && s.spatialEnabled
+        crossfeed = s.isBypassed || s.spatialEnabled ? .off : s.crossfeed
         let bal = Balance.gains(s.balance)
-        let common = s.isMuted ? 0 : volume * boost * preamp
+        let common = s.isMuted ? 0 : volume * boost * preamp * correctionPreamp
         leftGain = Float(common * bal.left)
         rightGain = Float(common * bal.right)
         strips = stripOrder.map { key in
