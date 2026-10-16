@@ -108,6 +108,8 @@ jobs:
       VERSION: ${{ needs.build.outputs.version }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false   # the updater check runs the published app; keep the write token out of .git/config
 
       - name: Select the newest Xcode
         run: sudo xcode-select -s "$(ls -d /Applications/Xcode*.app | sort -V | tail -1)"
@@ -135,17 +137,25 @@ jobs:
           # During a key rotation only: the retired key, still trusted by installed copies. The first release that
           # embeds a new public key is signed with this one; delete the secret once that release is out.
           EQUINOX_PREVIOUS_SIGNING_KEY: ${{ secrets.EQUINOX_RELEASE_SIGNING_KEY }}
+        # Only signs; nothing downloaded is ever run while the keys are in the environment.
         run: |
           if [[ -z "$EQUINOX_SIGNING_KEY" ]]; then echo "::error::Set the EQUINOX_SIGNING_KEY secret on the production environment."; exit 1; fi
           swift scripts/sign-release.swift build/Equinox-macos.zip
-          if [[ -n "${PREVIOUS_ZIP:-}" && -n "$EQUINOX_PREVIOUS_SIGNING_KEY" ]] \
-              && ! REQUIRE_SIGNATURE=1 scripts/verify-release.sh build/Equinox-macos.zip "$VERSION" >/dev/null 2>&1; then
-            echo "::warning::The published release doesn't trust the current key yet; signing this key-rotation release with the previous key."
-            EQUINOX_SIGNING_KEY="$EQUINOX_PREVIOUS_SIGNING_KEY" swift scripts/sign-release.swift --any-key build/Equinox-macos.zip
+          if [[ -n "$EQUINOX_PREVIOUS_SIGNING_KEY" ]]; then
+            mkdir -p build/rotation
+            cp build/Equinox-macos.zip build/rotation/
+            EQUINOX_SIGNING_KEY="$EQUINOX_PREVIOUS_SIGNING_KEY" swift scripts/sign-release.swift --any-key build/rotation/Equinox-macos.zip
           fi
 
       - name: Verify the updater accepts it
-        run: REQUIRE_SIGNATURE=1 scripts/verify-release.sh build/Equinox-macos.zip "$VERSION"
+        # No secrets here. Prefer the current key's signature; fall back to the previous key's only for a rotation release.
+        run: |
+          if ! REQUIRE_SIGNATURE=1 scripts/verify-release.sh build/Equinox-macos.zip "$VERSION"; then
+            [[ -f build/rotation/Equinox-macos.zip.sig ]] || exit 1
+            echo "::warning::The published release doesn't trust the current key yet; using the previous key's signature for this key-rotation release."
+            cp build/rotation/Equinox-macos.zip.sig build/Equinox-macos.zip.sig
+            REQUIRE_SIGNATURE=1 scripts/verify-release.sh build/Equinox-macos.zip "$VERSION"
+          fi
 
       - name: Publish release
         env:
