@@ -110,6 +110,8 @@ Every screenshot below is the real app, rendered offscreen from its own views.
   </tr>
 </table>
 
+**Music and speech presets:** Pop, Rock, Hip-Hop, R&B / Soul, Jazz, Classical, Metal, Dance, Latin and Ambient join Electronic and Acoustic. For spoken audio, try **Podcast — Clarity** for more vocal presence or **Podcast — Warm** for a softer top end. These are adjustable starting points; use **Save As…** to keep your own version.
+
 **Also in the box:** presets you can import and export (JSON), balance, mute, software volume for outputs without a hardware volume control (HDMI, some DACs), launch at login, and a first-run screen that checks the permission is working.
 
 ## Install
