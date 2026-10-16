@@ -326,7 +326,9 @@ public final class AppModel {
                                  isPlaying: appGroups.contains { $0.isPlaying && !dedicatedKeys.contains($0.key) },
                                  isDedicated: true, volume: others.volume, isMuted: others.isMuted,
                                  isSoloed: false, presetID: others.presetID)]
-        let apps = appGroups.sorted { ($0.isPlaying ? 0 : 1, $0.name) < ($1.isPlaying ? 0 : 1, $1.name) }
+        // Every process with a Core Audio connection is listed, including system daemons; show only real
+        // apps, plus anything that is playing or has its own channel.
+        let apps = appGroups.filter { $0.isApp || $0.isPlaying || dedicatedKeys.contains($0.key) }.sorted { ($0.isPlaying ? 0 : 1, $0.name) < ($1.isPlaying ? 0 : 1, $1.name) }
         strips += apps.map { g in
             let s = appMix[g.key] ?? AppMixSettings()
             return MixerStrip(id: g.key, name: g.name, bundleID: g.bundleID, isOthers: false, isPlaying: g.isPlaying,

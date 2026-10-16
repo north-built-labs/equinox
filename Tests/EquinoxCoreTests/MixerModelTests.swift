@@ -41,6 +41,18 @@ final class MixerModelTests: XCTestCase {
         XCTAssertTrue(audio.dedicated.isEmpty)
     }
 
+    func testBackgroundDaemonsShowOnlyWhilePlaying() {
+        let m = makeModel()
+        let daemon = AudioProcessInfo(objectID: 31, pid: 31, bundleID: "com.apple.mediaremoted", executableName: "mediaremoted",
+                                      isRunningOutput: false)
+        audio.onProcessesChange?(chrome + [spotify, daemon])
+        XCTAssertEqual(m.mixerStrips.map(\.name), ["Other Apps", "Google Chrome", "Spotify"])
+        let playing = AudioProcessInfo(objectID: 31, pid: 31, bundleID: "com.apple.mediaremoted", executableName: "mediaremoted",
+                                       isRunningOutput: true)
+        audio.onProcessesChange?(chrome + [spotify, playing])
+        XCTAssertTrue(m.mixerStrips.contains { $0.id == "com.apple.mediaremoted" })
+    }
+
     func testChangingAppVolumeDedicatesItWithAllProcesses() {
         let m = makeModel()
         m.setStripVolume(0.5, for: "com.google.Chrome")
