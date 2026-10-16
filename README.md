@@ -166,7 +166,9 @@ Releases are automatic. Every merge into `main` runs [`.github/workflows/release
 
 `main` is protected: changes land through pull requests, and the `lint` and `build` checks must pass.
 
-**Rotating the signing key:** put the new key's public half in `Sources/EquinoxCore/Updates.swift`, store the old key as the repo secret `EQUINOX_RELEASE_SIGNING_KEY` and the new one as `EQUINOX_SIGNING_KEY` on `production`. The first release then signs with the old key (installed copies still trust it) and every later one with the new key. Delete the old secret once that release is out; anyone who skipped it reinstalls with the one-liner.
+**Release signatures:** each release carries `Equinox-macos.zip.sig` (checked by the in-app updater) and `Equinox-macos.zip.sshsig` (the same Ed25519 key in OpenSSH format, checked by `install.sh` with `ssh-keygen -Y verify`, so the one-liner refuses an archive the release key didn't sign). Every release also gets a build provenance attestation: `gh attestation verify Equinox-macos.zip -R north-built-labs/equinox`. Releases wait for a reviewer to approve the `production` deployment.
+
+**Rotating the signing key:** put the new key's public half in `Sources/EquinoxCore/Updates.swift`, add its OpenSSH form as a second line in `RELEASE_SIGNERS` in `install.sh` (keep the old line until the rotation release is out), and on the `production` environment store the new key as `EQUINOX_SIGNING_KEY` and the old one as `EQUINOX_PREVIOUS_SIGNING_KEY`. The first release then uses the old key's signatures (the published release doesn't trust the new key yet) and every later one the new key's. Once that release is out, delete `EQUINOX_PREVIOUS_SIGNING_KEY` and the old `install.sh` line; anyone who skipped it reinstalls with the one-liner.
 
 To start a new minor or major version, raise `CFBundleShortVersionString` in `Resources/Info.plist` in your pull request. Pull requests get a build and a test run, and the built app is attached as a workflow artifact. A local build signs with your *Apple Development* certificate if you have one, so macOS remembers the audio permission across rebuilds.
 

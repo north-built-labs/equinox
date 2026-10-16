@@ -9,12 +9,18 @@
 #
 # Env: EQUINOX_INSTALL_DIR (default /Applications, or ~/Applications if that isn't writable),
 #      EQUINOX_NO_LAUNCH=1 to skip launching after install,
-#      EQUINOX_DOWNLOAD_URL to install a different archive (CI installs the build under test via file://).
+#      EQUINOX_DOWNLOAD_URL to install a different archive (CI installs the build under test via file://),
+#      EQUINOX_ALLOWED_SIGNERS to trust a different key file (CI tests with a throwaway key).
 set -euo pipefail
 
 REPO="north-built-labs/equinox"
 APP_NAME="Equinox.app"
 MODE="${1:-}"
+
+# Release archives must carry an OpenSSH signature (<zip>.sshsig) from this key: the Ed25519 release key whose raw
+# public half is embedded in Sources/EquinoxCore/Updates.swift, so the installer and the in-app updater trust the same
+# key. During a key rotation, list both keys. scripts/verify-release.sh checks this matches the app.
+RELEASE_SIGNERS='equinox-release namespaces="equinox-release" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHvZ4ATb1xdbTskHim4jgT4Zju/VosGGwDRkmcAIDI1k'
 
 say()  { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
 ok()   { printf '\033[1;32m✓\033[0m %s\n' "$*"; }
@@ -47,7 +53,18 @@ trap 'rm -rf "$TMP"' EXIT
 SOURCE_APP=""
 if [[ "$MODE" != "--from-source" ]]; then
     say "Downloading the latest Equinox release…"
-    if curl -fsSL -o "$TMP/Equinox.zip" "${EQUINOX_DOWNLOAD_URL:-https://github.com/$REPO/releases/latest/download/Equinox-macos.zip}"; then
+    URL="${EQUINOX_DOWNLOAD_URL:-https://github.com/$REPO/releases/latest/download/Equinox-macos.zip}"
+    if curl -fsSL -o "$TMP/Equinox.zip" "$URL"; then
+        curl -fsSL -o "$TMP/Equinox.zip.sshsig" "$URL.sshsig" || fail "Couldn't download the release's signature ($URL.sshsig)."
+        if [[ -n "${EQUINOX_ALLOWED_SIGNERS:-}" ]]; then
+            cp "$EQUINOX_ALLOWED_SIGNERS" "$TMP/allowed_signers"
+        else
+            echo "$RELEASE_SIGNERS" > "$TMP/allowed_signers"
+        fi
+        ssh-keygen -Y verify -f "$TMP/allowed_signers" -I equinox-release -n equinox-release \
+            -s "$TMP/Equinox.zip.sshsig" < "$TMP/Equinox.zip" >/dev/null 2>&1 \
+            || fail "The download isn't signed by the Equinox release key; not installing it."
+        ok "Signature verified"
         ditto -x -k "$TMP/Equinox.zip" "$TMP/release"
         SOURCE_APP="$TMP/release/$APP_NAME"
     else
