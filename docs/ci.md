@@ -3,12 +3,22 @@
 `.github/workflows/release.yml` validates every pull request and push to
 `main`, manual runs, and merge-queue groups. A weekly run catches changes in
 hosted runners and toolchains even when application code has not changed.
-There are no path filters that can bypass validation.
+The lightweight `changes` job checks the full Git diff (PR merge base to
+head, or push before/after commits). Documentation-only changes skip the
+macOS jobs and publishing: `docs/**`, root `AGENTS.md`, `CLAUDE.md`,
+`README.md`, `CONTRIBUTING.md`, `CHANGELOG.md`, `LICENSE`, the PR template,
+and issue templates. All other paths require full validation, including
+workflows, scripts, package files, resources, sources and tests. Failed diff
+inspection falls back to full validation. Scheduled, manual and merge-queue
+runs always validate everything. Lint always runs. Workflow-level path
+filters are avoided so the required check always reports a result.
 
-The `CI` job is the combined validation result. It fails if any prerequisite
-fails, is cancelled, or is skipped. Publishing requires this job and the
+The `CI` job is the combined validation result. It fails if change detection or lint fails, or an applicable macOS job
+fails, is cancelled, or is skipped. Only macOS jobs explicitly excluded by
+change detection may be skipped. Publishing requires this job and the
 packaged build to succeed, then approval through the existing `production`
-environment. Scheduled, manual, PR, and merge-queue runs never publish.
+environment. Documentation-only pushes do not publish. Scheduled, manual, PR, and
+merge-queue runs never publish.
 
 Checks:
 
