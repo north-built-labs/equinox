@@ -50,4 +50,12 @@ final class AppGroupingTests: XCTestCase {
         XCTAssertEqual(groups.map(\.key), ["com.apple.Safari"])
         XCTAssertEqual(groups[0].name, "Safari")
     }
+
+    func testOnlyGroupsOwnedByRegularAppsAreApps() {
+        let agent = RunningAppInfo(bundleID: "com.apple.universalaccessd", name: "universalaccessd", isRegular: false)
+        let groups = AppGrouping.group([p(1, "com.spotify.client"), p(2, "com.apple.universalaccessd"),
+                                        p(3, "com.apple.mediaremoted"), p(4, "", "systemstats")],
+                                       runningApps: apps + [agent], excludingBundleIDs: [], excludingPIDs: [])
+        XCTAssertEqual(groups.filter(\.isApp).map(\.key), ["com.spotify.client"])
+    }
 }
