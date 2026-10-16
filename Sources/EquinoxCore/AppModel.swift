@@ -66,6 +66,26 @@ public final class AppModel {
     public var stripMeters: StripMeters { audio.stripMeters }
     public var activeStripKeys: [String] { audio.activeStripKeys }
 
+    // MARK: Headphones
+    public private(set) var headphoneSettings: [String: HeadphoneSettings] = [:]
+    public private(set) var headphoneOverrides: [String: Bool] = [:]
+    public var autoEnableHeadphones = true { didSet { if !restoring { scheduleSave() } } }
+    public private(set) var autoEQResults: [AutoEQEntry] = []
+    public private(set) var autoEQStatus: String?
+    public private(set) var isApplyingAutoEQ = false
+
+    // MARK: Updates
+    public private(set) var availableUpdate: ReleaseInfo?
+    public private(set) var updateStatus: String?
+    public var checkForUpdatesAutomatically = true { didSet { if !restoring { scheduleSave() } } }
+    @ObservationIgnored private var lastUpdateCheck: Date?
+    public let currentVersion: String
+    nonisolated public static var bundleVersion: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0"
+    }
+    @ObservationIgnored private let autoEQ: AutoEQProviding
+    @ObservationIgnored private let updates: UpdateProviding
+
     // MARK: Effects
     public private(set) var availablePlugins: [AudioUnitID] = []
     public private(set) var disabledPluginKeys: Set<String> = []
@@ -87,11 +107,16 @@ public final class AppModel {
     @ObservationIgnored private var reloadEffectsOnNextPush = false
 
     public init(audio: AudioControlling, store: Store = Store(), loginItem: LoginItemControlling = SystemLoginItem(),
-                runningApps: RunningAppsProviding = WorkspaceRunningApps(), crashedPlugins: [AudioUnitID] = []) {
+                runningApps: RunningAppsProviding = WorkspaceRunningApps(), crashedPlugins: [AudioUnitID] = [],
+                autoEQ: AutoEQProviding? = nil, updates: UpdateProviding? = nil,
+                currentVersion: String = AppModel.bundleVersion) {
         self.audio = audio
         self.store = store
         self.loginItem = loginItem
         self.runningApps = runningApps
+        self.autoEQ = autoEQ ?? AutoEQCatalog(cacheDirectory: store.directory)
+        self.updates = updates ?? GitHubUpdates()
+        self.currentVersion = currentVersion
 
         let loaded = store.load(AppSettings.self, from: Self.settingsFile)
         let s = loaded.value ?? AppSettings()
@@ -118,6 +143,11 @@ public final class AppModel {
         launchAtLogin = s.launchAtLogin
         appMix = s.appMix
         disabledPluginKeys.formUnion(s.disabledPlugins)
+        headphoneSettings = s.headphones
+        headphoneOverrides = s.headphoneOverrides
+        autoEnableHeadphones = s.autoEnableHeadphones
+        checkForUpdatesAutomatically = s.checkForUpdates
+        lastUpdateCheck = s.lastUpdateCheck
         restoring = false
 
         audio.onStatusChange = { [weak self] in self?.status = $0 }
@@ -133,7 +163,10 @@ public final class AppModel {
 
     // MARK: Lifecycle
 
-    public func launch() { if hasCompletedOnboarding { audio.start() } }
+    public func launch() {
+        if hasCompletedOnboarding { audio.start() }
+        Task { await checkForUpdates(userInitiated: false) }
+    }
 
     public func completeOnboarding() {
         hasCompletedOnboarding = true
@@ -366,6 +399,101 @@ public final class AppModel {
         }
     }
 
+    // MARK: Headphones & updates
+
+    public var isHeadphoneOutput: Bool {
+        guard let d = currentDevice else { return false }
+        return headphoneOverrides[d.uid] ?? d.isHeadphones
+    }
+
+    /// Settings key: the jack and the speakers of the built-in output share a UID, so they are kept apart.
+    private var headphoneKey: String? {
+        currentDevice.map { $0.uid + (isHeadphoneOutput ? "#headphones" : "#speakers") }
+    }
+
+    public var headphones: HeadphoneSettings { headphoneKey.flatMap { headphoneSettings[$0] } ?? HeadphoneSettings() }
+
+    public func updateHeadphones(_ change: (inout HeadphoneSettings) -> Void) {
+        guard let key = headphoneKey else { return }
+        var s = headphoneSettings[key] ?? HeadphoneSettings()
+        change(&s)
+        s.spatial.width = min(max(s.spatial.width, SpatialParameters.widthRange.lowerBound), SpatialParameters.widthRange.upperBound)
+        s.spatial.room = min(max(s.spatial.room, 0), 1)
+        headphoneSettings[key] = s
+        push()
+    }
+
+    public func setHeadphoneOverride(_ value: Bool?) {
+        guard let uid = currentDevice?.uid else { return }
+        headphoneOverrides[uid] = value
+        ensureHeadphoneDefaults()
+        push()
+    }
+
+    private func ensureHeadphoneDefaults() {
+        guard let key = headphoneKey, headphoneSettings[key] == nil, isHeadphoneOutput, autoEnableHeadphones else { return }
+        headphoneSettings[key] = HeadphoneSettings(isEnabled: true)
+    }
+
+    public func searchAutoEQ(_ query: String) async {
+        autoEQStatus = nil
+        do {
+            autoEQResults = AutoEQIndex.search(try await autoEQ.entries(), query: query)
+            if autoEQResults.isEmpty, !query.trimmingCharacters(in: .whitespaces).isEmpty { autoEQStatus = "No matches." }
+        } catch {
+            autoEQResults = []
+            autoEQStatus = "Couldn't load the AutoEq database. Check your connection and try again."
+        }
+    }
+
+    public func applyAutoEQ(_ entry: AutoEQEntry) async {
+        isApplyingAutoEQ = true
+        defer { isApplyingAutoEQ = false }
+        do {
+            let profile = try await autoEQ.profile(for: entry)
+            updateHeadphones { $0.correction = profile; $0.isEnabled = true }
+            autoEQStatus = nil
+        } catch {
+            autoEQStatus = "Couldn't download that profile."
+        }
+    }
+
+    public func importCorrection(from data: Data, name: String) throws {
+        guard data.count < 200_000, let text = String(data: data, encoding: .utf8) else { throw ParametricEQText.ParseError.noFilters }
+        let profile = try ParametricEQText.parse(text, name: name, source: "Imported")
+        updateHeadphones { $0.correction = profile; $0.isEnabled = true }
+    }
+
+    public func removeCorrection() { updateHeadphones { $0.correction = nil } }
+
+    public func checkForUpdates(userInitiated: Bool) async {
+        if !userInitiated {
+            guard checkForUpdatesAutomatically else { return }
+            if let last = lastUpdateCheck, Date().timeIntervalSince(last) < 86_400 { return }
+        }
+        do {
+            let release = try await updates.latestRelease()
+            lastUpdateCheck = Date()
+            if UpdateChecker.isNewer(release.version, than: currentVersion) {
+                availableUpdate = release
+                updateStatus = "Equinox \(release.version) is available."
+            } else {
+                availableUpdate = nil
+                updateStatus = "Equinox is up to date."
+            }
+            scheduleSave()
+        } catch {
+            if userInitiated { updateStatus = "Couldn't check for updates." }
+        }
+    }
+
+    public func moveEffect(_ id: UUID, to index: Int) {
+        guard let i = working.effects.firstIndex(where: { $0.id == id }) else { return }
+        let slot = working.effects.remove(at: i)
+        working.effects.insert(slot, at: min(max(index, 0), working.effects.count))
+        push()
+    }
+
     // MARK: Devices
 
     public func refreshDevices() { devices = audio.outputDevices() }
@@ -377,8 +505,14 @@ public final class AppModel {
         // Volume mode follows the device, not the last slider write (a device without hardware
         // volume must keep getting the saved software volume after relaunch or a device switch).
         usesSoftwareVolume = !device.hasHardwareVolume
-        guard device.uid != currentDevice?.uid else { push(); return }
+        guard device.uid != currentDevice?.uid else {
+            currentDevice = device          // e.g. built-in output switched between speakers and the jack
+            ensureHeadphoneDefaults()
+            push()
+            return
+        }
         currentDevice = device
+        ensureHeadphoneDefaults()
         if let profile = deviceProfiles[device.uid] {
             // Only switch presets when the device remembers a different one; otherwise keep unsaved edits.
             if profile.presetID != selectedPresetID, presets.contains(where: { $0.id == profile.presetID }) {
@@ -436,7 +570,13 @@ public final class AppModel {
         s.balance = balance
         s.isMuted = isMuted
         s.strips = stripSettings()
+        let hp = headphones
+        let layer = hp.isEnabled
+        s.correction = layer ? hp.correction : nil
+        s.crossfeed = layer && !hp.spatialEnabled ? hp.crossfeed : .off
+        s.spatialEnabled = layer && hp.spatialEnabled
         audio.apply(s)
+        audio.setSpatial(s.spatialEnabled && isEnabled ? hp.spatial : nil)
         let effects = working.effects.filter { !isDisabledByCrash($0) }
         if reloadEffectsOnNextPush || effects.map(\.structure) != lastPushedEffects?.map(\.structure) {
             audio.setEffects(effects, reload: reloadEffectsOnNextPush)
@@ -472,6 +612,11 @@ public final class AppModel {
         s.launchAtLogin = launchAtLogin
         s.appMix = appMix
         s.disabledPlugins = disabledPluginKeys.sorted()
+        s.headphones = headphoneSettings
+        s.headphoneOverrides = headphoneOverrides
+        s.autoEnableHeadphones = autoEnableHeadphones
+        s.checkForUpdates = checkForUpdatesAutomatically
+        s.lastUpdateCheck = lastUpdateCheck
         do { try store.save(s, to: Self.settingsFile) }
         catch { lastError = "Could not save settings: \(error.localizedDescription)" }
     }
