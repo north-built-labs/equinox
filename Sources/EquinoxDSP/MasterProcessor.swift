@@ -1,7 +1,7 @@
 import Accelerate
 
-/// Master chain: EQ → gain (preamp·volume·boost·balance, ramped) → limiter.
-/// EQ is linear, so folding preamp into the post-EQ gain is equivalent and avoids zipper noise.
+/// Master stages around the hosted effects/spatial chain: EQ → crossfeed → Listening → output gain → limiter.
+/// Preamp stays folded into the ramped output gain; Listening detects before these user output controls.
 public final class MasterProcessor {
     public let maxFrames: Int
     public let limiter: PeakLimiter
@@ -9,6 +9,8 @@ public final class MasterProcessor {
     private let correction: BiquadBank
     private var correctionActive = false
     private let crossfeed: Crossfeed
+    private let listening: ListeningProcessor
+    public var listeningActivity: ListeningActivity { listening.activity }
     private var sampleRate: Double
     private var hasConfig = false
     private var currentLeft: Float = 1, currentRight: Float = 1
@@ -19,6 +21,7 @@ public final class MasterProcessor {
         eq = BiquadBank(maxFrames: maxFrames)
         correction = BiquadBank(maxFrames: maxFrames)
         crossfeed = Crossfeed(sampleRate: sampleRate)
+        listening = ListeningProcessor(sampleRate: sampleRate)
         self.sampleRate = sampleRate
         limiter = PeakLimiter(sampleRate: sampleRate)
     }
@@ -38,6 +41,7 @@ public final class MasterProcessor {
         }
         sampleRate = config.sampleRate
         crossfeed.configure(config.crossfeed, sampleRate: config.sampleRate)
+        listening.configure(config.listening)
         hasConfig = true
     }
 
@@ -55,19 +59,22 @@ public final class MasterProcessor {
             if !Self.isFinite(left + o, right + o, n) {
                 eq.reset()
                 correction.reset()
+                listening.reset()
                 (left + o).update(repeating: 0, count: n); (right + o).update(repeating: 0, count: n)
             }
         }
     }
 
-    /// Output stage (after the effects chain): gain ramp, then limiter. Realtime-safe, in place, any frame count.
+    /// Output stage: crossfeed, Listening, output gain, then limiter. Realtime-safe, in place, any frame count.
     public func processPost(left: UnsafeMutablePointer<Float>, right: UnsafeMutablePointer<Float>, frames: Int) {
         forEachChunk(frames) { o, n in
             if !Self.isFinite(left + o, right + o, n) {
                 limiter.reset()
+                listening.reset()
                 (left + o).update(repeating: 0, count: n); (right + o).update(repeating: 0, count: n)
             }
             crossfeed.process(left: left + o, right: right + o, frames: n)
+            listening.process(left: left + o, right: right + o, frames: n)
             ramp(left + o, &currentLeft, targetLeft, n)
             ramp(right + o, &currentRight, targetRight, n)
             limiter.process(left: left + o, right: right + o, frames: n)

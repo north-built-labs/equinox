@@ -47,6 +47,15 @@ enum Snapshots {
             save("graphic", GraphicEQView(model: model).padding(18).frame(width: 760).glassCard().padding(24).background(bg), dir)
             save("mixer", MixerPage(model: model, meters: meters).frame(width: 900).background(bg), dir)
             save("effects", EffectsPage(model: model).frame(width: 900).background(bg), dir)
+            model.listening.isEnabled = true
+            var listeningActivity = ListeningActivity()
+            listeningActivity.gainDB = -3.2
+            listeningActivity.bassDB = 0
+            listeningActivity.harshnessDB = 2.4
+            listeningActivity.sibilanceDB = 1.1
+            spectrum.freeze(levels: spectrum.levels, peakLeft: 0.55, peakRight: 0.48, listening: listeningActivity)
+            save("listening", ListeningPage(model: model, spectrum: spectrum).frame(width: 900).background(bg), dir)
+            model.listening.isEnabled = false
             // Parameter trees are only populated once a unit is attached to an engine (as in a real chain).
             let editorEngine = AVAudioEngine()
             let reverb = AVAudioUnitEffect(audioComponentDescription: AudioComponentDescription(

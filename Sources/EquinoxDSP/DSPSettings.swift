@@ -21,6 +21,7 @@ public struct DSPSettings: Codable, Equatable, Sendable {
     public var crossfeed: CrossfeedStrength = .off
     /// Spatial audio runs in the audio layer; when on, crossfeed is skipped.
     public var spatialEnabled = false
+    public var listening = ListeningSettings()
 
     public init() {}
 }
@@ -36,10 +37,14 @@ public final class DSPConfig: @unchecked Sendable {
     public let correctionCoefficients: [Double]?
     public let crossfeed: CrossfeedStrength
     public let spatialEnabled: Bool
+    public let listening: ListeningConfig
 
     public init(settings s: DSPSettings, sampleRate: Double, stripOrder: [String] = [StripSettings.othersKey]) {
         self.sampleRate = sampleRate
         isBypassed = s.isBypassed
+        var listeningSettings = s.listening
+        if s.isBypassed { listeningSettings.isEnabled = false }
+        listening = ListeningConfig(settings: listeningSettings, sampleRate: sampleRate)
         // Bypass turns the EQ and preamp off (ramped to identity, so no click);
         // output controls, the limiter and the non-finite guard stay active.
         let sections = s.isBypassed ? [] : s.bands.lazy.filter(\.isEnabled).prefix(BiquadBank.maxSections)

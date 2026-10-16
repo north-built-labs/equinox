@@ -120,6 +120,7 @@ public final class Renderer: @unchecked Sendable {
         spatialEntry = nil
         spatialMailbox.reset()
         self.inputStreamOffset = inputStreamOffset
+        analysis.writeListening(ListeningActivity())
     }
 
     public func lastCallbackNanos() -> UInt64 { lastCallback.load(ordering: .relaxed) }
@@ -164,6 +165,7 @@ public final class Renderer: @unchecked Sendable {
             processor.processPost(left: mixL, right: mixR, frames: frames)
         }
         analysis.write(left: mixL, right: mixR, frames: frames)
+        analysis.writeListening(processor.listeningActivity)
         ChannelIO.writeStereo(left: mixL, right: mixR, frames: frames, to: out)
     }
 }
