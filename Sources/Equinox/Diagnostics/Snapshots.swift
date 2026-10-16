@@ -55,7 +55,7 @@ enum Snapshots {
             save("effect-editor", GenericParameterView(unit: reverb.auAudioUnit).frame(width: 420, height: 520), dir)
             save("settings", SettingsPage(model: model).frame(width: 760).background(bg), dir)
             save("onboarding", OnboardingView(model: model, spectrum: spectrum).background(bg), dir)
-            save("main-window", MainWindow(model: model, spectrum: spectrum, meters: meters), dir, size: CGSize(width: 1100, height: 900))
+            save("main-window", MainWindow(model: model, spectrum: spectrum, meters: meters), dir, size: CGSize(width: 1100, height: 680))
             try? FileManager.default.removeItem(at: storeDir)
         }
         exit(0)

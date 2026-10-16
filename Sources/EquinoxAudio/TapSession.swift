@@ -53,7 +53,7 @@ public final class TapSession {
             let descriptions = [rest] + stripTaps.map(\.description)
             let aggregate: [String: Any] = [
                 kAudioAggregateDeviceNameKey: "Equinox",
-                kAudioAggregateDeviceUIDKey: "com.pie.equinox.aggregate.\(UUID().uuidString)",
+                kAudioAggregateDeviceUIDKey: "com.northbuiltlabs.equinox.aggregate.\(UUID().uuidString)",
                 kAudioAggregateDeviceMainSubDeviceKey: outputUID,
                 kAudioAggregateDeviceIsPrivateKey: true,
                 kAudioAggregateDeviceIsStackedKey: false,

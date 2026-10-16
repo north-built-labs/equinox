@@ -48,7 +48,7 @@ public protocol AudioControlling: AnyObject {
 
 @MainActor
 public final class AudioController: AudioControlling {
-    private static let log = Logger(subsystem: "com.pie.equinox", category: "audio")
+    private static let log = Logger(subsystem: "com.northbuiltlabs.equinox", category: "audio")
 
     public var onStatusChange: ((AudioStatus) -> Void)?
     public var onOutputDeviceChange: ((AudioDevice) -> Void)?

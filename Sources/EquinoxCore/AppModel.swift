@@ -269,7 +269,7 @@ public final class AppModel {
 
     private func processesChanged(_ processes: [AudioProcessInfo]) {
         appGroups = AppGrouping.group(processes, runningApps: runningApps.runningApps(),
-                                      excludingBundleIDs: [Bundle.main.bundleIdentifier ?? "com.pie.equinox", "com.pie.equinox"],
+                                      excludingBundleIDs: [Bundle.main.bundleIdentifier ?? "com.northbuiltlabs.equinox", "com.northbuiltlabs.equinox"],
                                       excludingPIDs: [getpid()])
         if let solo = soloKey, !appGroups.contains(where: { $0.key == solo }) { soloKey = nil }
         mixerChanged()

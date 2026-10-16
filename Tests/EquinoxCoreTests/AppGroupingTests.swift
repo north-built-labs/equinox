@@ -36,9 +36,9 @@ final class AppGroupingTests: XCTestCase {
     }
 
     func testExclusionsAndSorting() {
-        let groups = AppGrouping.group([p(1, "com.spotify.client"), p(2, "com.pie.equinox"), p(3, "com.google.Chrome"),
+        let groups = AppGrouping.group([p(1, "com.spotify.client"), p(2, "com.northbuiltlabs.equinox"), p(3, "com.google.Chrome"),
                                         p(4, "", "self", pid: 5000)],
-                                       runningApps: apps, excludingBundleIDs: ["com.pie.equinox"], excludingPIDs: [5004])
+                                       runningApps: apps, excludingBundleIDs: ["com.northbuiltlabs.equinox"], excludingPIDs: [5004])
         XCTAssertEqual(groups.map(\.name), ["Google Chrome", "Spotify"])
     }
 
