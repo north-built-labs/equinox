@@ -23,7 +23,7 @@ jobs:
     env:
       IS_RELEASE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
@@ -56,7 +56,7 @@ jobs:
 
       - name: Upload build (pull requests)
         if: env.IS_RELEASE != 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: Equinox-macos
           path: build/Equinox-macos.zip
