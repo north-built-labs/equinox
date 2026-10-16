@@ -8,7 +8,8 @@
 #   --uninstall     remove Equinox and its settings
 #
 # Env: EQUINOX_INSTALL_DIR (default /Applications, or ~/Applications if that isn't writable),
-#      EQUINOX_NO_LAUNCH=1 to skip launching after install.
+#      EQUINOX_NO_LAUNCH=1 to skip launching after install,
+#      EQUINOX_DOWNLOAD_URL to install a different archive (CI installs the build under test via file://).
 set -euo pipefail
 
 REPO="north-built-labs/equinox"
@@ -33,7 +34,7 @@ TARGET="$INSTALL_DIR/$APP_NAME"
 if [[ "$MODE" == "--uninstall" ]]; then
     pkill -x Equinox 2>/dev/null || true
     for dir in "$INSTALL_DIR" /Applications "$HOME/Applications"; do
-        [[ -d "$dir/$APP_NAME" ]] && rm -rf "$dir/$APP_NAME" && ok "Removed $dir/$APP_NAME"
+        [[ -d "$dir/$APP_NAME" ]] && rm -rf "${dir:?}/$APP_NAME" && ok "Removed $dir/$APP_NAME"
     done
     rm -rf "$HOME/Library/Application Support/Equinox" && ok "Removed settings and presets"
     say "Equinox is uninstalled. Your audio is back to normal."
@@ -46,7 +47,7 @@ trap 'rm -rf "$TMP"' EXIT
 SOURCE_APP=""
 if [[ "$MODE" != "--from-source" ]]; then
     say "Downloading the latest Equinox release…"
-    if curl -fsSL -o "$TMP/Equinox.zip" "https://github.com/$REPO/releases/latest/download/Equinox-macos.zip"; then
+    if curl -fsSL -o "$TMP/Equinox.zip" "${EQUINOX_DOWNLOAD_URL:-https://github.com/$REPO/releases/latest/download/Equinox-macos.zip}"; then
         ditto -x -k "$TMP/Equinox.zip" "$TMP/release"
         SOURCE_APP="$TMP/release/$APP_NAME"
     else
