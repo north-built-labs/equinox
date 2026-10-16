@@ -4,7 +4,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 base="$(plutil -extract CFBundleShortVersionString raw Resources/Info.plist)"
-latest="${RELEASE_LATEST-$(gh release view --json tagName -q .tagName 2>/dev/null || true)}"   # RELEASE_LATEST overrides (tests)
+latest="${RELEASE_LATEST-$(scripts/latest-release-tag.sh)}"   # RELEASE_LATEST overrides (tests)
 latest="${latest#v}"
 if [[ -z "$latest" ]]; then
     echo "$base"; exit 0
