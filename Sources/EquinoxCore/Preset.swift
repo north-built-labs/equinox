@@ -10,14 +10,16 @@ public struct Preset: Codable, Hashable, Identifiable, Sendable {
     public var bands: [EQBand]
     public var isBuiltIn: Bool
     public var effects: [EffectSlot]
+    public var listening: ListeningSettings
 
     public init(id: UUID = UUID(), name: String, preampDB: Double = 0, bands: [EQBand], isBuiltIn: Bool = false,
-                effects: [EffectSlot] = []) {
+                effects: [EffectSlot] = [], listening: ListeningSettings = ListeningSettings()) {
         self.id = id; self.name = name; self.preampDB = preampDB; self.bands = bands; self.isBuiltIn = isBuiltIn
         self.effects = effects
+        self.listening = listening.clamped()
     }
 
-    enum CodingKeys: String, CodingKey { case id, name, preampDB, bands, isBuiltIn, effects }
+    enum CodingKeys: String, CodingKey { case id, name, preampDB, bands, isBuiltIn, effects, listening }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -27,6 +29,7 @@ public struct Preset: Codable, Hashable, Identifiable, Sendable {
         bands = try c.decode([EQBand].self, forKey: .bands)
         isBuiltIn = try c.decodeIfPresent(Bool.self, forKey: .isBuiltIn) ?? false
         effects = (try? c.decodeIfPresent([EffectSlot].self, forKey: .effects)) ?? []
+        listening = (try? c.decodeIfPresent(ListeningSettings.self, forKey: .listening)) ?? ListeningSettings()
     }
 
     public static let graphicFrequencies: [Double] = [32, 64, 125, 250, 500, 1000, 2000, 4000, 8000, 16000]
@@ -79,7 +82,7 @@ public struct Preset: Codable, Hashable, Identifiable, Sendable {
                    preampDB: min(max(p.preampDB.isFinite ? p.preampDB : 0, -24), 24),
                    bands: p.bands.prefix(BiquadBank.maxSections).map { var b = $0.clamped(); b.id = UUID(); return b },
                    isBuiltIn: false,
-                   effects: p.effects.map(sanitizedForImport))
+                   effects: p.effects.map(sanitizedForImport), listening: p.listening.clamped())
         }
     }
 

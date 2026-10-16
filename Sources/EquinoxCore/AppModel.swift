@@ -38,6 +38,7 @@ public final class AppModel {
     public var selectedPreset: Preset { presets.first { $0.id == selectedPresetID } ?? Preset.flat }
     public var isModified: Bool {
         working.bands != selectedPreset.bands || working.preampDB != selectedPreset.preampDB
+            || working.listening != selectedPreset.listening
             || working.effects.map(\.structure) != selectedPreset.effects.map(\.structure)
             || effectParametersEdited
     }
@@ -55,6 +56,10 @@ public final class AppModel {
     public var preampDB: Double {
         get { working.preampDB }
         set { working.preampDB = min(max(newValue, -24), 24); push() }
+    }
+    public var listening: ListeningSettings {
+        get { working.listening }
+        set { working.listening = newValue.clamped(); push() }
     }
     public private(set) var hasCompletedOnboarding = false
     public var launchAtLogin = false { didSet { applyLaunchAtLogin(oldValue) } }
@@ -221,6 +226,7 @@ public final class AppModel {
         userPresets[i].bands = working.bands
         userPresets[i].effects = working.effects
         userPresets[i].preampDB = working.preampDB
+        userPresets[i].listening = working.listening
         working = userPresets[i]
         effectParametersEdited = false
         mixerChanged()
@@ -231,7 +237,8 @@ public final class AppModel {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let preset = Preset(name: trimmed.isEmpty ? "Untitled" : trimmed, preampDB: working.preampDB,
                             bands: working.bands, isBuiltIn: false,
-                            effects: working.effects.map { var e = $0; e.id = UUID(); return e })   // own slot identities
+                            effects: working.effects.map { var e = $0; e.id = UUID(); return e },
+                            listening: working.listening)   // own slot identities
         userPresets.append(preset)
         selectPreset(preset.id)
     }
@@ -610,6 +617,7 @@ public final class AppModel {
         s.isBypassed = !isEnabled
         s.preampDB = working.preampDB
         s.bands = working.bands
+        s.listening = working.listening
         s.softwareVolume = usesSoftwareVolume ? volume : 1
         s.boostDB = boostDB
         s.balance = balance

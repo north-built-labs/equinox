@@ -28,4 +28,29 @@ final class RendererTests: XCTestCase {
         XCTAssertEqual(out[126], 0.3 + 0.4 * 0.5, accuracy: 1e-5)
         XCTAssertGreaterThan(renderer.stripMeters.take(strip: 1), 0.19)
     }
+
+    func testListeningReachesOutputAndAnalysisTap() {
+        let renderer = Renderer()
+        renderer.prepare(sampleRate: 48_000, inputStreamOffset: 0)
+        var s = DSPSettings()
+        s.listening.isEnabled = true
+        s.listening.preserveDynamics = 0
+        s.listening.harshness = 0; s.listening.sibilance = 0
+        renderer.submit(DSPConfig(settings: s, sampleRate: 48_000))
+        let input = makeList([2], frames: 1024, fills: [0.4])
+        let output = makeList([2], frames: 1024, fills: [0])
+        defer {
+            for buffer in input { buffer.mData!.assumingMemoryBound(to: Float.self).deallocate() }
+            for buffer in output { buffer.mData!.assumingMemoryBound(to: Float.self).deallocate() }
+            input.unsafeMutablePointer.deallocate(); output.unsafeMutablePointer.deallocate()
+        }
+        for _ in 0..<180 {
+            renderer.render(input: UnsafePointer(input.unsafeMutablePointer), output: output.unsafeMutablePointer)
+        }
+        let out = output[0].mData!.assumingMemoryBound(to: Float.self)
+        XCTAssertEqual(out[2046], 0.1, accuracy: 0.001)
+        XCTAssertEqual(renderer.analysis.readListening().gainDB, -12.0412, accuracy: 0.05)
+        renderer.prepare(sampleRate: 96_000, inputStreamOffset: 0)
+        XCTAssertEqual(renderer.analysis.readListening(), ListeningActivity())
+    }
 }

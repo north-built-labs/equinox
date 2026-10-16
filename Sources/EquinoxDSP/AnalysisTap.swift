@@ -11,6 +11,10 @@ public final class AnalysisTap: @unchecked Sendable {
     private let writeIndex = Atomic<Int>(0)
     private let peakLeftBits = Atomic<UInt32>(0)
     private let peakRightBits = Atomic<UInt32>(0)
+    private let listeningGain = Atomic<UInt32>(0)
+    private let listeningBass = Atomic<UInt32>(0)
+    private let listeningHarshness = Atomic<UInt32>(0)
+    private let listeningSibilance = Atomic<UInt32>(0)
 
     public init() {
         ring = .allocate(capacity: Self.capacity)
@@ -58,5 +62,22 @@ public final class AnalysisTap: @unchecked Sendable {
     public func takePeaks() -> (left: Float, right: Float) {
         (Float(bitPattern: peakLeftBits.exchange(0, ordering: .relaxed)),
          Float(bitPattern: peakRightBits.exchange(0, ordering: .relaxed)))
+    }
+
+    /// Audio thread. Independent meter values do not require a coherent multi-field snapshot.
+    public func writeListening(_ activity: ListeningActivity) {
+        listeningGain.store(activity.gainDB.bitPattern, ordering: .relaxed)
+        listeningBass.store(activity.bassDB.bitPattern, ordering: .relaxed)
+        listeningHarshness.store(activity.harshnessDB.bitPattern, ordering: .relaxed)
+        listeningSibilance.store(activity.sibilanceDB.bitPattern, ordering: .relaxed)
+    }
+
+    public func readListening() -> ListeningActivity {
+        var activity = ListeningActivity()
+        activity.gainDB = Float(bitPattern: listeningGain.load(ordering: .relaxed))
+        activity.bassDB = Float(bitPattern: listeningBass.load(ordering: .relaxed))
+        activity.harshnessDB = Float(bitPattern: listeningHarshness.load(ordering: .relaxed))
+        activity.sibilanceDB = Float(bitPattern: listeningSibilance.load(ordering: .relaxed))
+        return activity
     }
 }

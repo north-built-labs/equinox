@@ -53,6 +53,12 @@ struct MenuBarPanel: View {
 
             PresetBar(model: model, compact: true)
 
+            Toggle(isOn: $model.listening.isEnabled) {
+                Label("Listening", systemImage: "waveform.path.ecg")
+            }
+            .toggleStyle(.switch).controlSize(.small).tint(Theme.cyan)
+            .help("Consistent volume and reactive EQ. Configure in the Listening page.")
+
             VStack(spacing: 8) {
                 VolumeControl(model: model)
                 MeterView(spectrum: spectrum)

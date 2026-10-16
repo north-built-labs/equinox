@@ -9,6 +9,7 @@ final class SpectrumModel {
     private(set) var levels: [Float]
     private(set) var peakLeft: Float = 0
     private(set) var peakRight: Float = 0
+    private(set) var listening = ListeningActivity()
     let frequencies: [Double]
 
     @ObservationIgnored private let analyzer = SpectrumAnalyzer()
@@ -43,15 +44,17 @@ final class SpectrumModel {
     }
 
     /// Diagnostics: show fixed levels and stop polling the tap.
-    func freeze(levels: [Float], peakLeft: Float, peakRight: Float) {
+    func freeze(levels: [Float], peakLeft: Float, peakRight: Float, listening: ListeningActivity = ListeningActivity()) {
         isFrozen = true
         self.levels = levels
         self.peakLeft = peakLeft
         self.peakRight = peakRight
+        self.listening = listening
     }
 
     private func tick() {
         guard !isFrozen else { return }
+        listening = tap.readListening()
         tap.copyLatest(into: &samples)
         let fresh = analyzer.analyze(samples, sampleRate: sampleRate())
         var next = levels

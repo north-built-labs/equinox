@@ -114,6 +114,16 @@ Every screenshot below is the real app, rendered offscreen from its own views.
 
 **Also in the box:** presets you can import and export (JSON), balance, mute, software volume for outputs without a hardware volume control (HDMI, some DACs), launch at login, and a first-run screen that checks the permission is working.
 
+**Listening:** open the Listening page to enable consistent volume and reactive EQ
+for the whole mix. Choose a target level and how much dynamics to preserve, then
+soften booming bass, harshness or sibilance with three adjustable dynamic cuts.
+Live meters show the gain and cuts being applied. Settings travel with your preset,
+and the menu bar has a quick Listening switch. Existing presets start with it off.
+Levelling uses stereo RMS (not LUFS), limits automatic gain to +6 dB / −18 dB, and
+gates upward adaptation during quiet pauses. Output volume and mute still act after
+Listening, followed by the safety limiter. Actual acoustic loudness depends on your
+device and volume; audible tuning across music, speech and hardware remains alpha.
+
 ## Install
 
 ### One line (recommended)
@@ -187,7 +197,7 @@ To start a new minor or major version, raise `CFBundleShortVersionString` in `Re
    per-app strips: EQ → volume/mute ─┐
                                      ├─► sum ─► headphone correction (AutoEq) ─► EQ (32 biquads, vDSP)
    ...                              ─┘     ─► effects (AVAudioEngine, realtime manual rendering)
-                                           ─► crossfeed or HRTF spatial ─► volume · balance · boost
+                                           ─► crossfeed or HRTF spatial ─► Listening ─► volume · balance · boost
                                                                          ─► peak limiter (−0.3 dBFS) ─► speakers
 ```
 
@@ -224,6 +234,7 @@ RESULT: all 29 checks passed
 - [x] **Effects & plugins:** built-in effects, Audio Unit hosting, crash protection
 - [x] **Headphones:** AutoEq correction, crossfeed, HRTF spatial audio, headphone detection
 - [x] **In-app updates:** signed releases, one-click install
+- [x] **Listening:** opt-in master volume levelling, dynamics control and three reactive EQ bands
 - [ ] Notarized builds (needs an Apple Developer ID)
 
 > [!IMPORTANT]
