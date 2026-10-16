@@ -45,6 +45,15 @@ environment. Preserve that approval gate and signing protections.
 Read `.github/workflows/release.yml` before modifying release behavior.
 Check live GitHub state before claiming a PR, check or release is complete.
 
+### Pull request bodies
+
+All agents must use `.github/pull_request_template.md` when creating or
+updating a PR, including through CLI or API tools that do not automatically
+load the template. Keep its headings and order, replace the guidance with
+concrete details, and remove HTML comments from the submitted body. Report
+only validation actually performed; use "None identified" for risks when
+applicable. Keep the title and body aligned with the final scope of the change.
+
 ## Handoff reference
 
 Read `docs/claude-handoff.md` for the recovered project checkpoint and
