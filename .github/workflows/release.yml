@@ -1,7 +1,8 @@
 name: Build & Release
 
 # Pull requests: lint, build the universal app, run the tests and check the packaged app + installer.
-# Every push to main (i.e. every merge): the same, then sign, prove the in-app updater accepts it, and publish.
+# Documentation-only changes skip macOS jobs and publishing; lint and CI always run.
+# Other pushes to main: validate, then sign, verify the updater, and publish.
 on:
   pull_request:
   push:
@@ -26,6 +27,45 @@ defaults:
     shell: bash
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      validate: ${{ steps.paths.outputs.validate }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Detect changes requiring macOS validation
+        id: paths
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          # Scheduled, manual and merge-queue runs always validate everything.
+          validate=true
+          if [[ "$EVENT" == pull_request || "$EVENT" == push ]]; then
+            if [[ "$EVENT" == pull_request ]]; then
+              range="$BASE...$HEAD"
+            else
+              range="$BASE..$HEAD"
+            fi
+            # Missing history or a failed diff must never skip validation.
+            # Disable rename detection so moves out of code retain their old path.
+            if git diff --no-renames --name-only -z "$range" -- > "$RUNNER_TEMP/changed-paths"; then
+              validate=false
+              while IFS= read -r -d '' path; do
+                case "$path" in
+                  docs/*|AGENTS.md|CLAUDE.md|README.md|CONTRIBUTING.md|CHANGELOG.md|LICENSE|.github/pull_request_template.md|.github/ISSUE_TEMPLATE/*) ;;
+                  *) validate=true; break ;;
+                esac
+              done < "$RUNNER_TEMP/changed-paths"
+            fi
+          fi
+          echo "validate=$validate" >> "$GITHUB_OUTPUT"
+
   lint:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -41,6 +81,8 @@ jobs:
         run: shellcheck install.sh scripts/*.sh
 
   test:
+    needs: changes
+    if: needs.changes.outputs.validate == 'true'
     name: Test (${{ matrix.os }}, ${{ matrix.configuration }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
@@ -74,6 +116,8 @@ jobs:
           retention-days: 14
 
   memory-safety:
+    needs: changes
+    if: needs.changes.outputs.validate == 'true'
     name: DSP Address Sanitizer
     runs-on: macos-26
     timeout-minutes: 30
@@ -96,6 +140,8 @@ jobs:
           retention-days: 14
 
   build:
+    needs: changes
+    if: needs.changes.outputs.validate == 'true'
     runs-on: macos-26
     timeout-minutes: 45
     env:
@@ -204,15 +250,22 @@ jobs:
   ci:
     name: CI
     if: ${{ always() }}
-    needs: [lint, test, memory-safety, build]
+    needs: [changes, lint, test, memory-safety, build]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Require every validation job to pass
+      - name: Require every applicable validation job to pass
         env:
           RESULTS: ${{ toJSON(needs) }}
+          VALIDATE: ${{ needs.changes.outputs.validate }}
         run: |
-          echo "$RESULTS" | jq -e 'all(.[]; .result == "success")'
+          echo "$RESULTS" | jq -e --arg validate "$VALIDATE" '
+            .changes.result == "success" and .lint.result == "success" and
+            (if $validate == "true" then
+               [.test, .["memory-safety"], .build] | all(.result == "success")
+             elif $validate == "false" then
+               [.test, .["memory-safety"], .build] | all(.result == "skipped")
+             else false end)'
 
   release:
     needs: [ci, build]
