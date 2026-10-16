@@ -9,10 +9,28 @@ public struct AudioDevice: Identifiable, Hashable, Sendable {
     public let transportType: UInt32
     /// Whether the device exposes a settable hardware volume; if not, Equinox applies volume in software.
     public let hasHardwareVolume: Bool
+    /// Headphones (jack in use, or a headphone-like name). The user can override this per device.
+    public let isHeadphones: Bool
 
-    public init(id: AudioObjectID, uid: String, name: String, transportType: UInt32, hasHardwareVolume: Bool = true) {
+    public init(id: AudioObjectID, uid: String, name: String, transportType: UInt32, hasHardwareVolume: Bool = true,
+                isHeadphones: Bool = false) {
         self.id = id; self.uid = uid; self.name = name; self.transportType = transportType
         self.hasHardwareVolume = hasHardwareVolume
+        self.isHeadphones = isHeadphones
+    }
+}
+
+public enum HeadphoneDetection {
+    static let headphoneJack: UInt32 = 0x6864706E   // 'hdpn'
+    static let keywords = ["airpods", "headphone", "headset", "earbud", "earphone", "buds", "beats",
+                           "wh-1000", "wf-1000", "quietcomfort", "momentum", "iem"]
+
+    /// Built-in output with the headphone jack in use, or a name that says headphones.
+    /// (Bluetooth alone isn't enough: it also covers speakers.) The user can override per device.
+    public static func isHeadphones(name: String, dataSource: UInt32?) -> Bool {
+        if dataSource == headphoneJack { return true }
+        let lowered = name.lowercased()
+        return keywords.contains { lowered.contains($0) }
     }
 }
 
@@ -26,12 +44,16 @@ public enum AudioSystem {
     }
 
     public static func describe(_ id: AudioObjectID) throws -> AudioDevice {
-        AudioDevice(id: id,
+        let name = try id.getString(kAudioObjectPropertyName)
+        let dataSource = id.has(kAudioDevicePropertyDataSource, scope: kAudioObjectPropertyScopeOutput)
+            ? try? id.get(kAudioDevicePropertyDataSource, scope: kAudioObjectPropertyScopeOutput, initial: UInt32(0)) : nil
+        return AudioDevice(id: id,
                     uid: try id.getString(kAudioDevicePropertyDeviceUID),
-                    name: try id.getString(kAudioObjectPropertyName),
+                    name: name,
                     transportType: (try? id.get(kAudioDevicePropertyTransportType, initial: UInt32(0))) ?? 0,
                     hasHardwareVolume: id.isSettable(kAudioHardwareServiceDeviceProperty_VirtualMainVolume,
-                                                     scope: kAudioObjectPropertyScopeOutput))
+                                                     scope: kAudioObjectPropertyScopeOutput),
+                    isHeadphones: HeadphoneDetection.isHeadphones(name: name, dataSource: dataSource))
     }
 
     public static func defaultOutputDevice() throws -> AudioObjectID {

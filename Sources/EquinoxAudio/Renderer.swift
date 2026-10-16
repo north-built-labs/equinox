@@ -62,6 +62,11 @@ final class EffectsBox: @unchecked Sendable {
     init(_ chain: EffectsChain?) { self.chain = chain }
 }
 
+final class SpatialBox: @unchecked Sendable {
+    let renderer: SpatialRenderer?
+    init(_ renderer: SpatialRenderer?) { self.renderer = renderer }
+}
+
 /// Owns the realtime render path invoked by the aggregate device's IOProc.
 public final class Renderer: @unchecked Sendable {
     public static let maxFrames = 4096
@@ -70,6 +75,11 @@ public final class Renderer: @unchecked Sendable {
     public let analysis = AnalysisTap()
     private let effectsMailbox = Mailbox<EffectsBox>()
     private var effects: Mailbox<EffectsBox>.Entry?
+    private let spatialMailbox = Mailbox<SpatialBox>()
+    private var spatialEntry: Mailbox<SpatialBox>.Entry?
+
+    /// Main thread. nil removes the spatial renderer.
+    public func submitSpatial(_ spatial: SpatialRenderer?) { spatialMailbox.post(SpatialBox(spatial)) }
 
     /// Main thread. nil removes the chain.
     public func submitEffects(_ chain: EffectsChain?) { effectsMailbox.post(EffectsBox(chain)) }
@@ -107,6 +117,8 @@ public final class Renderer: @unchecked Sendable {
         mailbox.reset()
         effects = nil
         effectsMailbox.reset()
+        spatialEntry = nil
+        spatialMailbox.reset()
         self.inputStreamOffset = inputStreamOffset
     }
 
@@ -137,10 +149,17 @@ public final class Renderer: @unchecked Sendable {
             effects = fxEntry                  // previous chain is still owned by the mailbox history
             effectsMailbox.acknowledge(fxEntry)
         }
+        if let spEntry = spatialMailbox.take() {
+            spatialEntry = spEntry
+            spatialMailbox.acknowledge(spEntry)
+        }
         if let config = current?.value {
             processor.processPre(left: mixL, right: mixR, frames: frames)
             if !config.isBypassed, let chain = effects?.value.chain {
                 chain.render(left: mixL, right: mixR, frames: frames)
+            }
+            if config.spatialEnabled, let spatial = spatialEntry?.value.renderer {
+                spatial.render(left: mixL, right: mixR, frames: frames)
             }
             processor.processPost(left: mixL, right: mixR, frames: frames)
         }

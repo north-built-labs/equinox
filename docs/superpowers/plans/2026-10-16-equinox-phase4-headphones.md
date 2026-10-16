@@ -375,6 +375,7 @@ public enum ParametricEQText {
 
 `Tests/EquinoxAudioTests/HeadphoneAudioTests.swift`:
 ```swift
+import CoreAudio
 import XCTest
 @testable import EquinoxAudio
 import EquinoxDSP
