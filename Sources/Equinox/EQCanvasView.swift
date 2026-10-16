@@ -124,7 +124,7 @@ struct EQCanvasView: View {
         }
         path.addLine(to: CGPoint(x: size.width, y: size.height))
         path.closeSubpath()
-        ctx.fill(path, with: .linearGradient(Gradient(colors: [Theme.violet.opacity(0.45), Theme.cyan.opacity(0.05)]),
+        ctx.fill(path, with: .linearGradient(Gradient(colors: [Theme.violet.opacity(0.22), Theme.cyan.opacity(0.025)]),
                                              startPoint: CGPoint(x: 0, y: size.height * 0.15),
                                              endPoint: CGPoint(x: 0, y: size.height)))
     }
@@ -156,7 +156,7 @@ struct EQCanvasView: View {
         ctx.fill(fill, with: .color(Theme.cyan.opacity(0.08 * opacity)))
         ctx.drawLayer { layer in
             layer.addFilter(.blur(radius: 6))
-            layer.stroke(curve, with: .color(Theme.cyan.opacity(0.6 * opacity)), lineWidth: 5)
+            layer.stroke(curve, with: .color(Theme.cyan.opacity(0.3 * opacity)), lineWidth: 5)
         }
         ctx.stroke(curve, with: .linearGradient(Gradient(colors: [Theme.cyan.opacity(opacity), Theme.violet.opacity(opacity)]),
                                                 startPoint: .zero, endPoint: CGPoint(x: size.width, y: 0)),
@@ -171,7 +171,7 @@ struct EQCanvasView: View {
             let rect = CGRect(x: c.x - r, y: c.y - r, width: 2 * r, height: 2 * r)
             let color = Theme.bandColor(i)
             if b.isEnabled {
-                ctx.drawLayer { l in l.addFilter(.blur(radius: 5)); l.fill(Path(ellipseIn: rect.insetBy(dx: -3, dy: -3)), with: .color(color.opacity(0.6))) }
+                ctx.drawLayer { l in l.addFilter(.blur(radius: 5)); l.fill(Path(ellipseIn: rect.insetBy(dx: -3, dy: -3)), with: .color(color.opacity(selected || hovered ? 0.5 : 0.15))) }
                 ctx.fill(Path(ellipseIn: rect), with: .color(color))
             } else {
                 ctx.stroke(Path(ellipseIn: rect), with: .color(.gray), lineWidth: 1.5)

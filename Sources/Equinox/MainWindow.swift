@@ -59,53 +59,107 @@ struct EqualizerPage: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                PresetBar(model: model)
-                Spacer()
-                StatusDot(status: model.status, enabled: model.isEnabled)
-                Toggle("Enabled", isOn: $model.isEnabled).toggleStyle(.switch).tint(Theme.cyan)
-            }
-
-            VStack(alignment: .leading, spacing: 14) {
-                EQCanvasView(model: model, spectrum: spectrum, selectedBandID: $selectedBandID)
-                    .frame(height: 320)
-                Picker("", selection: $graphic) {
-                    Text("Parametric").tag(false)
-                    Text("Graphic").tag(true)
+        VStack(alignment: .leading, spacing: 24) {
+            HStack(alignment: .center) {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("YOUR SOUND, SHAPED")
+                        .font(.system(size: 10, weight: .semibold)).tracking(2)
+                        .foregroundStyle(Theme.cyan)
+                    Text("Equalizer").font(.system(size: 30, weight: .semibold))
                 }
-                .pickerStyle(.segmented).labelsHidden().frame(width: 220)
-                if graphic { GraphicEQView(model: model) } else { BandInspector(model: model, selectedBandID: $selectedBandID) }
-            }
-            .glassCard(cornerRadius: 20, padding: 18)
-
-            HStack(alignment: .top, spacing: 16) {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Preamp").font(.headline)
-                    HStack {
-                        Slider(value: Binding(get: { model.preampDB }, set: { model.preampDB = ($0 * 2).rounded() / 2 }), in: -24...24)
-                            .tint(Theme.violet)
-                        Text(String(format: "%+.1f dB", model.preampDB))
-                            .font(.system(size: 12, design: .rounded).monospacedDigit()).frame(width: 64, alignment: .trailing)
+                Spacer()
+                VStack(alignment: .trailing, spacing: 6) {
+                    HStack(spacing: 7) {
+                        StatusDot(status: model.status, enabled: model.isEnabled)
+                        Text(model.currentDevice?.name ?? "No output selected")
+                            .font(.callout).lineLimit(1)
                     }
-                    Text("Lower the preamp when boosting bands to keep headroom. The limiter catches anything above 0 dB.")
+                    Text("\(Int(model.sampleRate / 1000)) kHz · Stereo")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+
+            VStack(spacing: 0) {
+                HStack(spacing: 16) {
+                    PresetBar(model: model)
+                    Spacer(minLength: 8)
+                    Toggle("Enabled", isOn: $model.isEnabled)
+                        .toggleStyle(.switch).tint(Theme.cyan).controlSize(.small)
+                }
+                .padding(18)
+                Divider().overlay(.white.opacity(0.04))
+
+                HStack {
+                    Label("FREQUENCY RESPONSE", systemImage: "waveform.path")
+                        .font(.system(size: 10, weight: .semibold)).tracking(1.2)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Picker("Equalizer mode", selection: $graphic) {
+                        Text("Parametric").tag(false)
+                        Text("Graphic").tag(true)
+                    }
+                    .pickerStyle(.segmented).labelsHidden().frame(width: 200)
+                }
+                .padding(.horizontal, 20).padding(.top, 18)
+
+                EQCanvasView(model: model, spectrum: spectrum, selectedBandID: $selectedBandID)
+                    .frame(height: 350)
+                    .padding(.horizontal, 18).padding(.top, 14).padding(.bottom, 10)
+
+                Divider().overlay(.white.opacity(0.04))
+                Group {
+                    if graphic {
+                        GraphicEQView(model: model)
+                    } else {
+                        BandInspector(model: model, selectedBandID: $selectedBandID)
+                    }
+                }
+                .padding(18)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.white.opacity(0.025))
+            }
+            .background(RoundedRectangle(cornerRadius: 18).fill(.white.opacity(0.025)))
+            .clipShape(RoundedRectangle(cornerRadius: 18))
+            .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(.white.opacity(0.08)))
+
+            HStack(alignment: .top, spacing: 28) {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Text("Preamp").font(.subheadline.weight(.semibold))
+                        Spacer()
+                        Text(String(format: "%+.1f dB", model.preampDB))
+                            .font(.system(size: 12, design: .rounded).monospacedDigit())
+                            .foregroundStyle(Theme.violet)
+                    }
+                    Slider(value: Binding(get: { model.preampDB }, set: { model.preampDB = ($0 * 2).rounded() / 2 }), in: -24...24)
+                        .tint(Theme.violet)
+                    Text("Leave headroom for boosted frequencies.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .glassCard()
 
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Output").font(.headline)
+                Rectangle().fill(.white.opacity(0.08)).frame(width: 1, height: 100)
+
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Text("Output").font(.subheadline.weight(.semibold))
+                        Spacer()
+                        Text(model.isMuted ? "MUTED" : "PEAK LIMITED")
+                            .font(.system(size: 9, weight: .medium)).tracking(1)
+                            .foregroundStyle(model.isMuted ? Theme.amber : .secondary)
+                    }
                     VolumeControl(model: model)
-                    BalanceControl(model: model)
                     MeterView(spectrum: spectrum)
+                    DisclosureGroup("Balance") { BalanceControl(model: model).padding(.top, 6) }
+                        .font(.caption).foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .glassCard()
             }
+            .padding(.horizontal, 4)
         }
-        .padding(24)
+        .padding(28)
     }
+
 }
 
 struct SettingsPage: View {
