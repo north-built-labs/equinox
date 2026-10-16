@@ -1,39 +1,44 @@
 // Ed25519 signing for release archives (verified by the in-app updater).
-//   swift scripts/sign-release.swift --generate     create the key pair (once); prints the public key to embed
 //   swift scripts/sign-release.swift <file.zip>     write <file.zip>.sig
-// The private key lives at ~/.config/equinox/release-signing-key (base64, mode 600) and must never be committed.
+// Key source: $EQUINOX_SIGNING_KEY (base64 raw key; set from the EQUINOX_RELEASE_SIGNING_KEY repo secret in CI),
+// else ~/.config/equinox/release-signing-key. The signature is checked against the public key embedded in
+// Sources/EquinoxCore/Updates.swift, so a release can never ship with a signature the app would reject.
 import CryptoKit
 import Foundation
 
-let keyURL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".config/equinox/release-signing-key")
-let args = CommandLine.arguments.dropFirst()
+func fail(_ message: String) -> Never {
+    FileHandle.standardError.write(Data((message + "\n").utf8))
+    exit(1)
+}
 
 func loadKey() -> Curve25519.Signing.PrivateKey {
-    guard let text = try? String(contentsOf: keyURL, encoding: .utf8),
-          let raw = Data(base64Encoded: text.trimmingCharacters(in: .whitespacesAndNewlines)),
+    let fileURL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".config/equinox/release-signing-key")
+    let text = ProcessInfo.processInfo.environment["EQUINOX_SIGNING_KEY"] ?? (try? String(contentsOf: fileURL, encoding: .utf8))
+    guard let text, let raw = Data(base64Encoded: text.trimmingCharacters(in: .whitespacesAndNewlines)),
           let key = try? Curve25519.Signing.PrivateKey(rawRepresentation: raw) else {
-        FileHandle.standardError.write(Data("No signing key at \(keyURL.path). Run with --generate first.\n".utf8))
-        exit(1)
+        fail("No release signing key: set EQUINOX_SIGNING_KEY or create \(fileURL.path).")
     }
     return key
 }
 
-if args.first == "--generate" {
-    if FileManager.default.fileExists(atPath: keyURL.path) {
-        print("Key already exists. Public key:", loadKey().publicKey.rawRepresentation.base64EncodedString())
-        exit(0)
+func embeddedPublicKey() -> Data {
+    let source = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        .appendingPathComponent("../Sources/EquinoxCore/Updates.swift").standardizedFileURL
+    guard let text = try? String(contentsOf: source, encoding: .utf8),
+          let start = text.range(of: "releasePublicKey = Data(base64Encoded: \""),
+          let end = text.range(of: "\")", range: start.upperBound..<text.endIndex),
+          let key = Data(base64Encoded: String(text[start.upperBound..<end.lowerBound])) else {
+        fail("Couldn't read the embedded release public key from \(source.path).")
     }
-    let key = Curve25519.Signing.PrivateKey()
-    try FileManager.default.createDirectory(at: keyURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-    try key.rawRepresentation.base64EncodedString().write(to: keyURL, atomically: true, encoding: .utf8)
-    try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: keyURL.path)
-    print("Wrote \(keyURL.path). Public key:", key.publicKey.rawRepresentation.base64EncodedString())
-} else if let path = args.first {
-    let file = URL(fileURLWithPath: path)
-    let signature = try loadKey().signature(for: Data(contentsOf: file))
-    try signature.write(to: file.appendingPathExtension("sig"))
-    print("Signed \(file.lastPathComponent) → \(file.lastPathComponent).sig")
-} else {
-    print("usage: sign-release.swift --generate | <archive>")
-    exit(2)
+    return key
 }
+
+guard let path = CommandLine.arguments.dropFirst().first else { fail("usage: sign-release.swift <archive>") }
+let file = URL(fileURLWithPath: path)
+let key = loadKey()
+guard key.publicKey.rawRepresentation == embeddedPublicKey() else {
+    fail("This signing key doesn't match the public key embedded in the app; the updater would reject the release.")
+}
+let signature = try key.signature(for: Data(contentsOf: file))
+try signature.write(to: file.appendingPathExtension("sig"))
+print("Signed \(file.lastPathComponent) → \(file.lastPathComponent).sig")

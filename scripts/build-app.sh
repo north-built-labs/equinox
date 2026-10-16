@@ -5,6 +5,8 @@
 #   scripts/build-app.sh --release  universal (Apple silicon + Intel) build, ad-hoc signed, zipped to build/Equinox-macos.zip
 #                                   and Ed25519-signed (build/Equinox-macos.zip.sig) for the in-app updater
 # Env: SIGN_ID=<identity> to choose a signing identity (default: "Apple Development" if installed, else ad-hoc).
+#      VERSION / BUILD_NUMBER stamp CFBundleShortVersionString / CFBundleVersion into the built app (CI releases).
+#      EQUINOX_SIGNING_KEY: release signing key for --release (else ~/.config/equinox/release-signing-key).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 CONFIG="${CONFIG:-release}"
@@ -32,6 +34,12 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN_DIR/Equinox" "$APP/Contents/MacOS/Equinox"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
+if [[ -n "${VERSION:-}" ]]; then
+    /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP/Contents/Info.plist"
+fi
+if [[ -n "${BUILD_NUMBER:-}" ]]; then
+    /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$APP/Contents/Info.plist"
+fi
 codesign --force --sign "$SIGN_ID" --timestamp=none "$APP"
 echo "Built $APP (signed: $SIGN_ID)"
 
@@ -46,7 +54,7 @@ case "$MODE" in
         ditto -c -k --keepParent "$APP" build/Equinox-macos.zip
         echo "Packaged build/Equinox-macos.zip"
         # The in-app updater only installs archives signed with the release key (see scripts/sign-release.swift).
-        if [[ -f "$HOME/.config/equinox/release-signing-key" ]]; then
+        if [[ -n "${EQUINOX_SIGNING_KEY:-}" || -f "$HOME/.config/equinox/release-signing-key" ]]; then
             swift scripts/sign-release.swift build/Equinox-macos.zip
         else
             echo "warning: no release signing key; build/Equinox-macos.zip is unsigned and the in-app updater will refuse it" >&2

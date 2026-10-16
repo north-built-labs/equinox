@@ -81,9 +81,9 @@ public enum UpdateInstaller {
         guard fm.isWritableFile(atPath: app.deletingLastPathComponent().path) else { return false }
         return !fm.fileExists(atPath: path) || fm.isWritableFile(atPath: path)
     }
-    /// Ed25519 public key whose private half signs release archives (scripts/sign-release.swift).
+    /// Ed25519 public key whose private half (repo secret EQUINOX_RELEASE_SIGNING_KEY) signs release archives in CI.
     /// Updates whose signature doesn't verify against it are never unpacked.
-    public static let releasePublicKey = Data(base64Encoded: "/CLOa2msNt88AUDxOWJd/c5X+AWrBiyd0BbqANbfjSg=")!
+    public static let releasePublicKey = Data(base64Encoded: "bi0dvFaA1dCjiwdrjZfuIpcPPkr56NlFLJ/qkPYd99Y=")!
 
     public static func verifySignature(of archive: Data, signature: Data, publicKey: Data = releasePublicKey) throws {
         guard let key = try? Curve25519.Signing.PublicKey(rawRepresentation: publicKey),
