@@ -79,6 +79,8 @@ public final class AppModel {
     public private(set) var updateStatus: String?
     public var checkForUpdatesAutomatically = true { didSet { if !restoring { scheduleSave() } } }
     @ObservationIgnored private var lastUpdateCheck: Date?
+    @ObservationIgnored private var latestAutoEQQuery = ""
+    public private(set) var isInstallingUpdate = false
     public let currentVersion: String
     nonisolated public static var bundleVersion: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0"
@@ -401,9 +403,13 @@ public final class AppModel {
 
     // MARK: Headphones & updates
 
+    /// Overrides are stored per detected state, so overriding the jack never affects the speakers of the
+    /// same (shared-UID) built-in output, and vice versa.
+    private var overrideKey: String? { currentDevice.map { $0.uid + ($0.isHeadphones ? "#detected-headphones" : "#detected-speakers") } }
+
     public var isHeadphoneOutput: Bool {
         guard let d = currentDevice else { return false }
-        return headphoneOverrides[d.uid] ?? d.isHeadphones
+        return overrideKey.flatMap { headphoneOverrides[$0] } ?? d.isHeadphones
     }
 
     /// Settings key: the jack and the speakers of the built-in output share a UID, so they are kept apart.
@@ -424,8 +430,8 @@ public final class AppModel {
     }
 
     public func setHeadphoneOverride(_ value: Bool?) {
-        guard let uid = currentDevice?.uid else { return }
-        headphoneOverrides[uid] = value
+        guard let device = currentDevice, let key = overrideKey else { return }
+        headphoneOverrides[key] = value == device.isHeadphones ? nil : value
         ensureHeadphoneDefaults()
         push()
     }
@@ -436,11 +442,15 @@ public final class AppModel {
     }
 
     public func searchAutoEQ(_ query: String) async {
+        latestAutoEQQuery = query
         autoEQStatus = nil
         do {
-            autoEQResults = AutoEQIndex.search(try await autoEQ.entries(), query: query)
+            let entries = try await autoEQ.entries()
+            guard query == latestAutoEQQuery else { return }   // a newer search superseded this one
+            autoEQResults = AutoEQIndex.search(entries, query: query)
             if autoEQResults.isEmpty, !query.trimmingCharacters(in: .whitespaces).isEmpty { autoEQStatus = "No matches." }
         } catch {
+            guard query == latestAutoEQQuery else { return }
             autoEQResults = []
             autoEQStatus = "Couldn't load the AutoEq database. Check your connection and try again."
         }
@@ -484,6 +494,39 @@ public final class AppModel {
             scheduleSave()
         } catch {
             if userInitiated { updateStatus = "Couldn't check for updates." }
+        }
+    }
+
+    /// Downloads, verifies and hands off the available update. Returns true when the caller should quit
+    /// so the swap script can replace the app; otherwise `updateStatus` explains what went wrong.
+    public func installUpdate(currentApp: URL = Bundle.main.bundleURL) async -> Bool {
+        guard let release = availableUpdate, !isInstallingUpdate else { return false }
+        guard UpdateInstaller.canReplace(appAt: currentApp) else {
+            updateStatus = "Equinox can't update itself from where it is. Move it to your Applications folder, or download \(release.version) from GitHub."
+            return false
+        }
+        isInstallingUpdate = true
+        defer { isInstallingUpdate = false }
+        updateStatus = "Downloading Equinox \(release.version)…"
+        do {
+            let staged = try await updates.stage(release)
+            try updates.verify(appAt: staged, newerThan: currentVersion)
+            try updates.launchReplacement(current: currentApp, replacement: staged)
+            flushSave()
+            return true
+        } catch {
+            updateStatus = Self.message(for: error)
+            return false
+        }
+    }
+
+    static func message(for error: Error) -> String {
+        switch error as? UpdateError {
+        case .unsigned?, .badSignature?: "The download's signature didn't check out, so it wasn't installed."
+        case .notEquinox?: "The download wasn't Equinox, so it wasn't installed."
+        case .notNewer?: "The download isn't newer than this version."
+        case .badArchive?: "The download was damaged. Try again."
+        default: "The update couldn't be downloaded. Check your connection, or get it from GitHub."
         }
     }
 

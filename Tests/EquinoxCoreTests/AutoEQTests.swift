@@ -4,10 +4,14 @@ import EquinoxDSP
 
 final class FakeFetcher: DataFetching, @unchecked Sendable {
     var responses: [String: Data] = [:]
-    var requested: [URL] = []
+    private let lock = NSLock()
+    private var _requested: [URL] = []
+    var requested: [URL] { lock.withLock { _requested } }
     var offline = false
+    var delay: Duration = .zero
     func data(from url: URL) async throws -> Data {
-        requested.append(url)
+        lock.withLock { _requested.append(url) }
+        if delay > .zero { try await Task.sleep(for: delay) }
         if offline { throw URLError(.notConnectedToInternet) }
         guard let d = responses[url.absoluteString] else { throw URLError(.fileDoesNotExist) }
         return d
@@ -84,5 +88,25 @@ final class AutoEQTests: XCTestCase {
         XCTAssertEqual(entries.count, 4)
         let empty = makeCatalog(f, dir: dir.appendingPathComponent("none"))
         do { _ = try await empty.entries(); XCTFail("expected error") } catch {}
+    }
+
+    func testConcurrentLoadsShareOneDownload() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("autoeq-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let f = FakeFetcher()
+        f.delay = .milliseconds(200)
+        f.responses[AutoEQCatalog.indexURL.absoluteString] = Data(index.utf8)
+        let catalog = makeCatalog(f, dir: dir)
+        async let a = catalog.entries()
+        async let b = catalog.entries()
+        async let c = catalog.entries()
+        let counts = try await [a.count, b.count, c.count]
+        XCTAssertEqual(counts, [4, 4, 4])
+        XCTAssertEqual(f.requested.count, 1)
+    }
+
+    func testRejectsEncodedTraversal() {
+        let evil = "- [X](./a/%2e%2E/b) by attacker"
+        XCTAssertTrue(AutoEQIndex.parse(evil).isEmpty)
     }
 }

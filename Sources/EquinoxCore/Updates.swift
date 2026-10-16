@@ -46,6 +46,12 @@ public enum UpdateChecker {
 
 public protocol UpdateProviding: AnyObject {
     func latestRelease() async throws -> ReleaseInfo
+    /// Downloads, signature-checks and unpacks the release; returns the staged app.
+    func stage(_ release: ReleaseInfo) async throws -> URL
+    /// Staged app must be Equinox and newer than `current`.
+    func verify(appAt app: URL, newerThan current: String) throws
+    /// Starts the detached swap-and-relaunch; the caller then quits.
+    func launchReplacement(current: URL, replacement: URL) throws
 }
 
 public final class GitHubUpdates: UpdateProviding, @unchecked Sendable {
@@ -54,9 +60,27 @@ public final class GitHubUpdates: UpdateProviding, @unchecked Sendable {
     public func latestRelease() async throws -> ReleaseInfo {
         try UpdateChecker.parseLatest(try await fetcher.data(from: UpdateChecker.latestURL))
     }
+    public func stage(_ release: ReleaseInfo) async throws -> URL { try await UpdateInstaller.stage(release, fetcher: fetcher) }
+    public func verify(appAt app: URL, newerThan current: String) throws {
+        try UpdateInstaller.verify(appAt: app, expectedBundleID: UpdateInstaller.bundleID, newerThan: current)
+    }
+    public func launchReplacement(current: URL, replacement: URL) throws {
+        try UpdateInstaller.launchReplacement(current: current, replacement: replacement)
+    }
 }
 
 public enum UpdateInstaller {
+    public static let bundleID = "com.northbuiltlabs.equinox"
+
+    /// Equinox can only replace itself where it can write: not translocated, not on a read-only volume,
+    /// not in a folder owned by another user.
+    public static func canReplace(appAt app: URL) -> Bool {
+        let path = app.path
+        guard !path.contains("/AppTranslocation/") else { return false }
+        let fm = FileManager.default
+        guard fm.isWritableFile(atPath: app.deletingLastPathComponent().path) else { return false }
+        return !fm.fileExists(atPath: path) || fm.isWritableFile(atPath: path)
+    }
     /// Ed25519 public key whose private half signs release archives (scripts/sign-release.swift).
     /// Updates whose signature doesn't verify against it are never unpacked.
     public static let releasePublicKey = Data(base64Encoded: "/CLOa2msNt88AUDxOWJd/c5X+AWrBiyd0BbqANbfjSg=")!
@@ -97,15 +121,25 @@ public enum UpdateInstaller {
 
     static func quote(_ s: String) -> String { "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'" }
 
-    /// Waits for Equinox (pid) to exit, swaps the bundle, clears quarantine, relaunches.
+    /// Waits for Equinox (pid) to exit (gives up, without touching anything, if it never does), copies the new
+    /// app next to the old one, swaps them with two renames, clears quarantine and relaunches. Any failure keeps
+    /// (or restores) the old app and reopens it.
     public static func relaunchScript(current: URL, replacement: URL, pid: Int32) -> String {
         let cur = quote(current.path), new = quote(replacement.path)
+        let curNew = quote(current.path + ".new"), curOld = quote(current.path + ".old")
         return """
         #!/bin/sh
-        for i in $(seq 1 100); do kill -0 \(pid) 2>/dev/null || break; sleep 0.1; done
-        rm -rf \(cur).old
-        if mv \(cur) \(cur).old; then
-          if ditto \(new) \(cur); then rm -rf \(cur).old; else rm -rf \(cur); mv \(cur).old \(cur); fi
+        for i in $(seq 1 300); do kill -0 \(pid) 2>/dev/null || break; sleep 0.1; done
+        kill -0 \(pid) 2>/dev/null && exit 1
+        rm -rf \(curNew) \(curOld)
+        ditto \(new) \(curNew) || { rm -rf \(curNew); open \(cur); exit 1; }
+        if mv \(cur) \(curOld) && mv \(curNew) \(cur); then
+          rm -rf \(curOld)
+        else
+          [ -d \(cur) ] || mv \(curOld) \(cur)
+          rm -rf \(curNew)
+          open \(cur)
+          exit 1
         fi
         xattr -dr com.apple.quarantine \(cur) 2>/dev/null
         open \(cur)

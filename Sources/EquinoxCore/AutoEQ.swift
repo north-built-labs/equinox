@@ -50,7 +50,9 @@ public enum AutoEQIndex {
     }
 
     static func isSafe(_ path: String) -> Bool {
-        path.hasPrefix("./") && !path.contains("..") && !path.contains("?") && !path.contains("#") && !path.contains("://")
+        let lowered = path.lowercased()
+        return path.hasPrefix("./") && !path.contains("..") && !lowered.contains("%2e") && !lowered.contains("%2f")
+            && !path.contains("?") && !path.contains("#") && !path.contains("://") && !path.contains("\\")
     }
 
     /// Entries whose name contains every whitespace-separated token; names starting with the query first.
@@ -79,17 +81,19 @@ public protocol AutoEQProviding: AnyObject {
 }
 
 /// Downloads AutoEq's index (cached on disk, refreshed weekly, stale copy used offline) and profiles.
-public final class AutoEQCatalog: AutoEQProviding, @unchecked Sendable {
+/// An actor: concurrent searches share one in-flight index download.
+public actor AutoEQCatalog: AutoEQProviding {
     public static let indexURL = URL(string: AutoEQIndex.resultsBase + "INDEX.md")!
 
     private let fetcher: DataFetching
     private let cacheFile: URL
     private let maxAge: TimeInterval
-    private let now: () -> Date
+    private let now: @Sendable () -> Date
     private var memory: [AutoEQEntry]?
+    private var loading: Task<[AutoEQEntry], Error>?
 
     public init(fetcher: DataFetching = URLSessionFetching(), cacheDirectory: URL = Store.defaultDirectory,
-                maxAge: TimeInterval = 7 * 86_400, now: @escaping () -> Date = Date.init) {
+                maxAge: TimeInterval = 7 * 86_400, now: @escaping @Sendable () -> Date = { Date() }) {
         self.fetcher = fetcher
         cacheFile = cacheDirectory.appendingPathComponent("autoeq-index.md")
         self.maxAge = maxAge
@@ -98,12 +102,19 @@ public final class AutoEQCatalog: AutoEQProviding, @unchecked Sendable {
 
     public func entries() async throws -> [AutoEQEntry] {
         if let memory { return memory }
+        if let loading { return try await loading.value }
+        let task = Task { try await self.load() }
+        loading = task
+        defer { loading = nil }
+        let entries = try await task.value
+        memory = entries
+        return entries
+    }
+
+    private func load() async throws -> [AutoEQEntry] {
         let cached = try? String(contentsOf: cacheFile, encoding: .utf8)
         let modified = (try? cacheFile.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
-        if let cached, let modified, now().timeIntervalSince(modified) < maxAge {
-            memory = AutoEQIndex.parse(cached)
-            return memory!
-        }
+        if let cached, let modified, now().timeIntervalSince(modified) < maxAge { return AutoEQIndex.parse(cached) }
         do {
             let data = try await fetcher.data(from: Self.indexURL)
             guard data.count < 20_000_000, let text = String(data: data, encoding: .utf8) else { throw URLError(.cannotDecodeContentData) }
@@ -111,10 +122,9 @@ public final class AutoEQCatalog: AutoEQProviding, @unchecked Sendable {
             guard !parsed.isEmpty else { throw URLError(.cannotParseResponse) }
             try? FileManager.default.createDirectory(at: cacheFile.deletingLastPathComponent(), withIntermediateDirectories: true)
             try? data.write(to: cacheFile, options: .atomic)
-            memory = parsed
             return parsed
         } catch {
-            if let cached { memory = AutoEQIndex.parse(cached); return memory! }
+            if let cached { return AutoEQIndex.parse(cached) }
             throw error
         }
     }

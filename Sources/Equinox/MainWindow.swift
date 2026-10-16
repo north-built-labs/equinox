@@ -110,7 +110,6 @@ struct EqualizerPage: View {
 
 struct SettingsPage: View {
     @Bindable var model: AppModel
-    @State private var updateError: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -126,12 +125,16 @@ struct SettingsPage: View {
                 HStack {
                     Button("Check Now") { Task { await model.checkForUpdates(userInitiated: true) } }
                     if let release = model.availableUpdate {
-                        Button("Install \(release.version) & Relaunch") { Task { await install(release) } }
-                            .keyboardShortcut(.defaultAction)
+                        Button("Install \(release.version) & Relaunch") {
+                            Task { if await model.installUpdate() { NSApp.terminate(nil) } }
+                        }
+                        .keyboardShortcut(.defaultAction)
+                        .disabled(model.isInstallingUpdate)
+                        if model.isInstallingUpdate { ProgressView().controlSize(.small) }
                         Link("Release notes", destination: release.pageURL).font(.caption)
                     }
                 }
-                if let status = model.updateStatus ?? updateError { Text(status).font(.caption).foregroundStyle(.secondary) }
+                if let status = model.updateStatus { Text(status).font(.caption).foregroundStyle(.secondary) }
             }.frame(maxWidth: .infinity, alignment: .leading).glassCard()
 
             VStack(alignment: .leading, spacing: 10) {
@@ -155,19 +158,6 @@ struct SettingsPage: View {
             }
         }
         .padding(24)
-    }
-
-    private func install(_ release: ReleaseInfo) async {
-        do {
-            let staged = try await UpdateInstaller.stage(release)
-            try UpdateInstaller.verify(appAt: staged, expectedBundleID: Bundle.main.bundleIdentifier ?? "com.northbuiltlabs.equinox",
-                                       newerThan: model.currentVersion)
-            try UpdateInstaller.launchReplacement(current: Bundle.main.bundleURL, replacement: staged)
-            model.flushSave()
-            NSApp.terminate(nil)
-        } catch {
-            updateError = "The update couldn't be installed. You can download it from GitHub instead."
-        }
     }
 
     private var statusText: String {

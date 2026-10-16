@@ -13,6 +13,16 @@ final class FakeAutoEQ: AutoEQProviding {
 }
 
 final class FakeUpdates: UpdateProviding {
+    var stageError: Error?
+    var staged = 0
+    var launched: (URL, URL)?
+    func stage(_ release: ReleaseInfo) async throws -> URL {
+        staged += 1
+        if let stageError { throw stageError }
+        return URL(fileURLWithPath: "/tmp/staged/Equinox.app")
+    }
+    func verify(appAt app: URL, newerThan current: String) throws {}
+    func launchReplacement(current: URL, replacement: URL) throws { launched = (current, replacement) }
     var release = ReleaseInfo(version: "9.9.9", downloadURL: URL(string: "https://example.com/Equinox-macos.zip")!,
                               signatureURL: URL(string: "https://example.com/Equinox-macos.zip.sig")!,
                               pageURL: URL(string: "https://example.com")!)
@@ -137,5 +147,79 @@ final class HeadphoneModelTests: XCTestCase {
         XCTAssertEqual(m.working.effects.map(\.id), [c, a, b])
         m.moveEffect(c, to: 99)
         XCTAssertEqual(m.working.effects.map(\.id), [a, b, c])
+    }
+
+    func testOverrideDoesNotLeakAcrossJackAndSpeakers() {
+        let m = makeModel()
+        audio.onOutputDeviceChange?(jack)
+        m.setHeadphoneOverride(false)
+        m.setHeadphoneOverride(true)                  // back to what detection says
+        m.updateHeadphones { $0.crossfeed = .medium }
+        audio.onOutputDeviceChange?(speakers)         // unplug: same UID
+        XCTAssertFalse(m.isHeadphoneOutput)
+        XCTAssertEqual(audio.applied.last?.crossfeed, .off)
+    }
+
+    func testInstallReportsFailuresAndSucceedsWhenPossible() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("inst-\(UUID().uuidString)")
+        let app = dir.appendingPathComponent("Equinox.app")
+        try FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let updates = FakeUpdates()
+        let m = makeModel(updates: updates)
+        await m.checkForUpdates(userInitiated: true)
+
+        updates.stageError = UpdateError.badSignature
+        var ok = await m.installUpdate(currentApp: app)
+        XCTAssertFalse(ok)
+        XCTAssertTrue(m.updateStatus?.contains("signature") == true, m.updateStatus ?? "nil")
+        XCTAssertFalse(m.isInstallingUpdate)
+
+        updates.stageError = nil
+        ok = await m.installUpdate(currentApp: app)
+        XCTAssertTrue(ok)
+        XCTAssertEqual(updates.launched?.0, app)
+    }
+
+    func testInstallRefusesUnwritableLocationWithoutDownloading() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("ro-\(UUID().uuidString)")
+        let app = dir.appendingPathComponent("Equinox.app")
+        try FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: dir.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.path)
+            try? FileManager.default.removeItem(at: dir)
+        }
+        let updates = FakeUpdates()
+        let m = makeModel(updates: updates)
+        await m.checkForUpdates(userInitiated: true)
+        let ok = await m.installUpdate(currentApp: app)
+        XCTAssertFalse(ok)
+        XCTAssertEqual(updates.staged, 0)
+        XCTAssertTrue(m.updateStatus?.contains("Applications") == true, m.updateStatus ?? "nil")
+        XCTAssertFalse(UpdateInstaller.canReplace(appAt: URL(fileURLWithPath: "/private/var/folders/x/AppTranslocation/y/d/Equinox.app")))
+    }
+
+    func testStaleSearchResultsAreDropped() async {
+        let slow = SlowAutoEQ()
+        let m = makeModel(autoEQ: slow)
+        async let first: Void = m.searchAutoEQ("apple")          // slow
+        try? await Task.sleep(for: .milliseconds(20))
+        await m.searchAutoEQ("apple airpods pro 2")               // fast, newer
+        await first
+        XCTAssertEqual(m.autoEQResults.map(\.name), ["Apple AirPods Pro 2"])
+    }
+}
+
+final class SlowAutoEQ: AutoEQProviding {
+    var calls = 0
+    func entries() async throws -> [AutoEQEntry] {
+        calls += 1
+        if calls == 1 { try? await Task.sleep(for: .milliseconds(300)) }
+        return [AutoEQEntry(name: "Apple AirPods Pro", source: "a", rig: nil, path: "./a/b"),
+                AutoEQEntry(name: "Apple AirPods Pro 2", source: "a", rig: nil, path: "./a/c")]
+    }
+    func profile(for entry: AutoEQEntry) async throws -> CorrectionProfile {
+        CorrectionProfile(name: entry.name, source: entry.source, preampDB: 0, bands: [EQBand(frequency: 100)])
     }
 }

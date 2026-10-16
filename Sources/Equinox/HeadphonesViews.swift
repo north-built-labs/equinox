@@ -77,8 +77,10 @@ struct HeadphonesPage: View {
                 if model.isApplyingAutoEQ { ProgressView().controlSize(.small) }
             }
             .padding(8).background(RoundedRectangle(cornerRadius: 8).fill(.white.opacity(0.06)))
-            .onChange(of: query) { _, q in
-                Task { try? await Task.sleep(for: .milliseconds(300)); if q == query { await model.searchAutoEQ(q) } }
+            .task(id: query) {   // debounced; a newer query cancels the older search
+                try? await Task.sleep(for: .milliseconds(300))
+                guard !Task.isCancelled else { return }
+                await model.searchAutoEQ(query)
             }
             if let status = model.autoEQStatus { Text(status).font(.caption).foregroundStyle(Theme.amber) }
             if !model.autoEQResults.isEmpty {

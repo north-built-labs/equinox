@@ -164,6 +164,9 @@ final class PreviewAutoEQ: AutoEQProviding {
 }
 
 final class PreviewUpdates: UpdateProviding {
+    func stage(_ release: ReleaseInfo) async throws -> URL { throw UpdateError.badArchive }
+    func verify(appAt app: URL, newerThan current: String) throws {}
+    func launchReplacement(current: URL, replacement: URL) throws {}
     func latestRelease() async throws -> ReleaseInfo {
         ReleaseInfo(version: "0.5.0", downloadURL: URL(string: "https://github.com/north-built-labs/equinox/releases/download/v0.5.0/Equinox-macos.zip")!,
                     signatureURL: URL(string: "https://github.com/north-built-labs/equinox/releases/download/v0.5.0/Equinox-macos.zip.sig")!,
